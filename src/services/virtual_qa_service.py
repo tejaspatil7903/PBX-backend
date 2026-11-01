@@ -3,6 +3,7 @@ import io
 import re
 import json
 import time
+import uuid
 import struct
 import hashlib
 import asyncio
@@ -454,24 +455,49 @@ async def trigger_qa_violation(
 
         # Record audit event in DB
         try:
+            safe_tid = None
+            if tenant_id:
+                try:
+                    safe_tid = str(uuid.UUID(str(tenant_id)))
+                except Exception:
+                    pass
+            if not safe_tid:
+                try:
+                    t_row = await execute_query_one("SELECT id FROM tenants LIMIT 1")
+                    safe_tid = str(t_row["id"]) if t_row else None
+                except Exception:
+                    safe_tid = str(tenant_id) if tenant_id else None
+
+            safe_cfg_id = None
+            if config_id:
+                try:
+                    safe_cfg_id = str(uuid.UUID(str(config_id)))
+                except Exception:
+                    pass
+
             await execute_query(
                 """
                 INSERT INTO qa_events (
-                    tenant_id, call_uuid, qa_config_id, event_type, agent_extension,
-                    warn_count, transcript, coaching_message, audio_file_path, details
+                    tenant_id, call_uuid, config_id, qa_config_id, event_type, agent_extension,
+                    customer_extension, warn_count, reason, transcript, transcript_snippet,
+                    coaching_message, whisper_text, audio_file_path, details
                 ) VALUES (
-                    CAST(:tid AS uuid), :uuid, CAST(:cfg_id AS uuid), 'warning', :agent_ext,
-                    :warn_cnt, :transcript, :coaching, :wav_path, CAST(:details AS jsonb)
+                    CAST(:tid AS uuid), :uuid, CAST(:cfg_id AS uuid), CAST(:cfg_id AS uuid), 'warning', :agent_ext,
+                    :cust_ext, :warn_cnt, :reason, :transcript, :transcript,
+                    :coaching, :whisper, :wav_path, CAST(:details AS jsonb)
                 )
                 """,
                 {
-                    "tid": tenant_id,
+                    "tid": safe_tid,
                     "uuid": call_uuid,
-                    "cfg_id": config_id,
+                    "cfg_id": safe_cfg_id,
                     "agent_ext": qa_agent_ext,
+                    "cust_ext": qa_customer_ext,
                     "warn_cnt": warn_count,
+                    "reason": violation_data.get("reason", "Policy violation"),
                     "transcript": transcript,
                     "coaching": coaching,
+                    "whisper": whisper_text,
                     "wav_path": wav_path,
                     "details": json.dumps(violation_data)
                 }
@@ -511,22 +537,46 @@ async def trigger_qa_violation(
 
             # Record escalation in DB
             try:
+                safe_tid = None
+                if tenant_id:
+                    try:
+                        safe_tid = str(uuid.UUID(str(tenant_id)))
+                    except Exception:
+                        pass
+                if not safe_tid:
+                    try:
+                        t_row = await execute_query_one("SELECT id FROM tenants LIMIT 1")
+                        safe_tid = str(t_row["id"]) if t_row else None
+                    except Exception:
+                        safe_tid = str(tenant_id) if tenant_id else None
+
+                safe_cfg_id = None
+                if config_id:
+                    try:
+                        safe_cfg_id = str(uuid.UUID(str(config_id)))
+                    except Exception:
+                        pass
+
                 await execute_query(
                     """
                     INSERT INTO qa_events (
-                        tenant_id, call_uuid, qa_config_id, event_type, agent_extension,
-                        warn_count, transcript, coaching_message, details
+                        tenant_id, call_uuid, config_id, qa_config_id, event_type, agent_extension,
+                        customer_extension, warn_count, reason, transcript, transcript_snippet,
+                        coaching_message, whisper_text, details
                     ) VALUES (
-                        CAST(:tid AS uuid), :uuid, CAST(:cfg_id AS uuid), 'escalation', :agent_ext,
-                        :warn_cnt, :transcript, :coaching, CAST(:details AS jsonb)
+                        CAST(:tid AS uuid), :uuid, CAST(:cfg_id AS uuid), CAST(:cfg_id AS uuid), 'escalation', :agent_ext,
+                        :cust_ext, :warn_cnt, :reason, :transcript, :transcript,
+                        :coaching, :coaching, CAST(:details AS jsonb)
                     )
                     """,
                     {
-                        "tid": tenant_id,
+                        "tid": safe_tid,
                         "uuid": call_uuid,
-                        "cfg_id": config_id,
+                        "cfg_id": safe_cfg_id,
                         "agent_ext": qa_agent_ext,
+                        "cust_ext": qa_customer_ext,
                         "warn_cnt": warn_count,
+                        "reason": violation_data.get("reason", "Max warnings exceeded"),
                         "transcript": transcript,
                         "coaching": coaching,
                         "details": json.dumps(violation_data)

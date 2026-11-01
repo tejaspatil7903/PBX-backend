@@ -48,6 +48,16 @@ class InterveneRequest(BaseModel):
     supervisor_extension: Optional[str] = None
 
 
+class StartDemoCallRequest(BaseModel):
+    tenant_id: Optional[str] = None
+    agent_extension: str = "1001"
+    customer_extension: str = "2001"
+
+
+class SimulateSpeechRequest(BaseModel):
+    utterance: Optional[str] = None
+
+
 # =========================================================================
 # ENDPOINTS
 # =========================================================================
@@ -415,9 +425,86 @@ async def simulate_violation(
     Demo/testing endpoint to trigger a simulated violation on an active call.
     Gated strictly by QA_DEMO_MODE=True.
     """
-    if not settings.QA_DEMO_MODE:
-        raise HTTPException(status_code=404, detail="Demo simulation endpoint disabled in production")
+@router.post("/calls/start-demo")
+async def start_demo_call(
+    payload: Optional[StartDemoCallRequest] = None,
+    current_user: CurrentUser = Depends(require_module("virtual-qa", allowed_roles=["SUPER_ADMIN", "TENANT_ADMIN", "SUB_ADMIN", "SUPERVISOR"]))
+):
+    """
+    Creates an active monitored call in Redis so users can experience live QA monitoring directly from the platform UI.
+    """
+    req = payload or StartDemoCallRequest()
+    tid = req.tenant_id if current_user.is_super_admin and req.tenant_id else current_user.tenant_id
+    if not tid:
+        t_row = await execute_query_one("SELECT id FROM tenants LIMIT 1")
+        tid = str(t_row["id"]) if t_row else None
+    if not tid:
+        raise HTTPException(status_code=400, detail="Tenant context required")
 
+    r_obj = get_redis()
+    redis_client = await r_obj if hasattr(r_obj, "__await__") else r_obj
+    if not redis_client:
+        raise HTTPException(status_code=503, detail="Redis unavailable")
+
+    import uuid as _uuid
+    call_uuid = f"demo-{_uuid.uuid4().hex[:8]}"
+
+    # Look up active QA config for tenant
+    cfg = await execute_query_one(
+        "SELECT id FROM virtual_qa_configs WHERE tenant_id = CAST(:tid AS uuid) AND enabled = true AND deleted_at IS NULL LIMIT 1",
+        {"tid": tid}
+    )
+    config_id = str(cfg["id"]) if cfg else ""
+
+    now_ts = time.time()
+    call_data = {
+        "call_uuid": call_uuid,
+        "tenant_id": tid,
+        "agent_ext": req.agent_extension,
+        "customer_ext": req.customer_extension,
+        "agent_leg": "bleg",
+        "warn_count": "0",
+        "escalated": "0",
+        "config_id": config_id,
+        "started_at": str(now_ts),
+    }
+
+    call_key = f"tenant:{tid}:qa_call:{call_uuid}"
+    await redis_client.hset(call_key, mapping=call_data)
+    await redis_client.expire(call_key, 3600)
+
+    from src.core.websocket_manager import broadcast_qa_event
+    await broadcast_qa_event(tid, {
+        "event_type": "qa.call_started",
+        "call_uuid": call_uuid,
+        "tenant_id": tid,
+        "agent_extension": req.agent_extension,
+        "customer_extension": req.customer_extension,
+    })
+
+    return {
+        "status": "started",
+        "call_uuid": call_uuid,
+        "tenant_id": tid,
+        "agent_extension": req.agent_extension,
+        "customer_extension": req.customer_extension,
+        "agent_leg": "bleg",
+        "warn_count": 0,
+        "escalated": False,
+        "started_at": now_ts
+    }
+
+
+@router.post("/calls/{call_uuid}/simulate-violation")
+async def simulate_violation(
+    call_uuid: str,
+    payload: Optional[SimulateSpeechRequest] = None,
+    current_user: CurrentUser = Depends(require_module("virtual-qa", allowed_roles=["SUPER_ADMIN", "TENANT_ADMIN", "SUB_ADMIN", "SUPERVISOR"]))
+):
+    """
+    Demo/testing endpoint to trigger live Gemini evaluation and ElevenLabs whisper on an active call.
+    Accepts an optional custom agent utterance from the UI.
+    """
     tid = current_user.tenant_id
     r_obj = get_redis()
     redis_client = await r_obj if hasattr(r_obj, "__await__") else r_obj
@@ -431,33 +518,81 @@ async def simulate_violation(
     if not call_data:
         raise HTTPException(status_code=404, detail="Call not found")
 
+    cfg_id = call_data.get("config_id")
+    qa_cfg = None
+    if cfg_id:
+        qa_cfg = await execute_query_one(
+            "SELECT id, COALESCE(policy_prompt, qa_policy_prompt) as policy_prompt, banned_keywords, max_warn_retries, cooldown_seconds, supervisor_extension FROM virtual_qa_configs WHERE id = CAST(:id AS uuid)",
+            {"id": cfg_id}
+        )
+    if not qa_cfg:
+        qa_cfg = await execute_query_one(
+            "SELECT id, COALESCE(policy_prompt, qa_policy_prompt) as policy_prompt, banned_keywords, max_warn_retries, cooldown_seconds, supervisor_extension FROM virtual_qa_configs WHERE tenant_id = CAST(:tid AS uuid) AND enabled = true LIMIT 1",
+            {"tid": tid}
+        )
+
+    policy_prompt = (qa_cfg.get("policy_prompt") if qa_cfg else None) or "Agent must be courteous, empathetic, and professional at all times. Never use profanity, insults, or rude tone."
+    banned_keywords = qa_cfg.get("banned_keywords") if qa_cfg else ["shut up", "idiot", "stupid", "hell", "damn"]
+    if isinstance(banned_keywords, str):
+        try:
+            banned_keywords = json.loads(banned_keywords)
+        except Exception:
+            banned_keywords = ["shut up", "idiot", "stupid", "hell", "damn"]
+
+    utterance = payload.utterance.strip() if payload and payload.utterance else "Look you stupid idiot, didn't I tell you your payment failed?"
+
+    from src.services.virtual_qa_service import local_policy_check, evaluate_with_gemini
+    local_hit = local_policy_check(utterance, banned_keywords)
+    gemini_res = await evaluate_with_gemini(utterance, policy_prompt)
+
+    is_violation = bool(local_hit or gemini_res.get("violation"))
+    reason = gemini_res.get("reason") or (f"Banned keyword detected: {local_hit['keyword']}" if local_hit else "Policy violation")
+    coaching = gemini_res.get("coaching") or "Please maintain courteous and professional communication standards."
+
+    if not is_violation:
+        return {
+            "status": "compliant",
+            "violation": False,
+            "transcript": utterance,
+            "reason": reason or "Complies with policy",
+            "coaching": None
+        }
+
     call_info = {
         "call_uuid": call_uuid,
         "tenant_id": tid,
         "qa_agent_ext": call_data.get("agent_ext", "1001"),
         "qa_customer_ext": call_data.get("customer_ext", "1002"),
         "qa_agent_leg": call_data.get("agent_leg", "bleg"),
-        "qa_config_id": call_data.get("config_id"),
-        "max_warn_retries": 3,
-        "cooldown_seconds": 10,
-        "qa_supervisor_ext": "9001"
+        "qa_config_id": str(qa_cfg["id"]) if qa_cfg and "id" in qa_cfg else cfg_id,
+        "max_warn_retries": int(qa_cfg.get("max_warn_retries", 3) if qa_cfg else 3),
+        "cooldown_seconds": int(qa_cfg.get("cooldown_seconds", 3) if qa_cfg else 3),
+        "qa_supervisor_ext": str(qa_cfg.get("supervisor_extension", "9001") if qa_cfg else "9001"),
     }
-    violation = {
+
+    violation_data = {
         "violation": True,
         "type": "simulated",
-        "keyword": "simulated_violation",
-        "reason": "Simulated policy violation triggered via API",
-        "coaching": "This is a simulated warning. Please maintain call quality standards."
+        "keyword": local_hit["keyword"] if local_hit else None,
+        "reason": reason,
+        "coaching": coaching
     }
 
     res = await trigger_qa_violation(
         call_info=call_info,
-        violation_data=violation,
-        transcript="Simulated test transcript containing a policy breach.",
+        violation_data=violation_data,
+        transcript=utterance,
         redis_client=redis_client,
         esl_client=qa_service
     )
-    return {"status": "simulated", "result": res}
+    return {
+        "status": "violation_processed",
+        "violation": True,
+        "transcript": utterance,
+        "reason": reason,
+        "coaching": coaching,
+        "result": res
+    }
 
 
 @router.get("/events")

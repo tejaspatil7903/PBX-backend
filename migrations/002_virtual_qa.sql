@@ -66,14 +66,19 @@ CREATE TABLE IF NOT EXISTS public.qa_events (
     id BIGSERIAL PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
     config_id UUID REFERENCES public.virtual_qa_configs(id) ON DELETE SET NULL,
+    qa_config_id UUID REFERENCES public.virtual_qa_configs(id) ON DELETE SET NULL,
     call_uuid VARCHAR(64) NOT NULL,
     event_type VARCHAR(30) NOT NULL,   -- 'warning' | 'escalation' | 'intervention' | 'call_ended'
     agent_extension VARCHAR(20),
     customer_extension VARCHAR(20),
     warn_count INTEGER,
     reason TEXT,
+    transcript TEXT,
     transcript_snippet TEXT,
     whisper_text TEXT,
+    coaching_message TEXT,
+    audio_file_path VARCHAR(255),
+    details JSONB,
     latency_ms INTEGER,                 -- utterance-to-whisper, for tuning
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

@@ -46,13 +46,46 @@ async def process_utterance(
     agent_ext: str = "1001",
     customer_ext: str = "2001",
     call_uuid: str = None,
-    tenant_id: str = "tenant-demo-01",
+    tenant_id: str = None,
     policy: str = "Agents must always remain courteous, empathetic, and professional. Never use profanity, insults, or threaten customers."
 ):
     await init_redis()
 
     if not call_uuid:
         call_uuid = f"demo-call-{uuid.uuid4().hex[:8]}"
+
+    # Auto-resolve actual tenant UUID so it appears on the live PBX platform
+    if not tenant_id or tenant_id == "tenant-demo-01":
+        try:
+            from src.core.database import execute_query_one
+            t_row = await execute_query_one("SELECT id FROM tenants WHERE domain = 'pbx.terrixai.com' OR name = 'aikyamlabs' LIMIT 1")
+            if not t_row:
+                t_row = await execute_query_one("SELECT id FROM tenants LIMIT 1")
+            tenant_id = str(t_row["id"]) if t_row else "9c61b161-db6f-4825-b7db-cb76d88155c5"
+        except Exception:
+            tenant_id = "9c61b161-db6f-4825-b7db-cb76d88155c5"
+
+    # Register active call in Redis so it appears live on the PBX platform
+    from src.core.redis import get_redis
+    r = await get_redis()
+    if r:
+        try:
+            await r.hset(
+                f"tenant:{tenant_id}:qa_call:{call_uuid}",
+                mapping={
+                    "call_uuid": call_uuid,
+                    "tenant_id": tenant_id,
+                    "agent_ext": agent_ext,
+                    "customer_ext": customer_ext,
+                    "agent_leg": "bleg",
+                    "warn_count": 0,
+                    "escalated": 0,
+                    "started_at": str(time.time()),
+                }
+            )
+            await r.expire(f"tenant:{tenant_id}:qa_call:{call_uuid}", 3600)
+        except Exception:
+            pass
 
     call_info = {
         "call_uuid": call_uuid,
