@@ -36,6 +36,8 @@ services:
       dockerfile: Dockerfile.api
     container_name: pbx_api
     restart: always
+    env_file:
+      - .env
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
@@ -60,6 +62,8 @@ services:
       - ./src:/app/src
       - ./tests:/app/tests
       - ./migrations:/app/migrations
+      - ./credentials:/app/credentials
+      - ./recordings:/app/recordings
       - ./config/freeswitch:/etc/freeswitch
       - recording_storage:/var/lib/freeswitch/recordings
 
