@@ -548,7 +548,7 @@ async def simulate_violation(
 
     is_violation = bool(local_hit or gemini_res.get("violation"))
     reason = gemini_res.get("reason") or (f"Banned keyword detected: {local_hit['keyword']}" if local_hit else "Policy violation")
-    coaching = gemini_res.get("coaching") or "Please maintain courteous and professional communication standards."
+    coaching = gemini_res.get("coaching") or (local_hit.get("coaching") if local_hit else "Hey, stay calm and keep your tone polite and professional.")
 
     if not is_violation:
         return {

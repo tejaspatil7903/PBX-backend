@@ -134,7 +134,7 @@ async def process_utterance(
 
     # 3. Dynamic Whisper Audio Generation via ElevenLabs TTS
     print("\n🎙️  Generating dynamic whisper coaching audio with ElevenLabs Flash v2.5...")
-    whisper_text = f"Warning: {coaching[:120]}"
+    whisper_text = coaching
     tts_start = time.time()
     wav_path = await synthesize_elevenlabs_tts(whisper_text)
     tts_duration = time.time() - tts_start
