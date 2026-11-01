@@ -43,6 +43,26 @@ class Settings(BaseSettings):
     S3_BUCKET_NAME: str = ""
     GCS_BUCKET_NAME: str = ""
 
+    # Virtual QA & AI Settings
+    ELEVENLABS_API_KEY: str = ""
+    ELEVENLABS_STT_MODEL: str = "scribe_v1"
+    ELEVENLABS_TTS_MODEL: str = "eleven_flash_v2_5"
+    ELEVENLABS_VOICE_ID: str = "JBFqnCBsd6RMkjVDRZzb"
+    GOOGLE_APPLICATION_CREDENTIALS: str = ""
+    GOOGLE_CLOUD_PROJECT: str = ""
+    GOOGLE_CLOUD_LOCATION: str = "global"
+    GEMINI_QA_MODEL: str = "gemini-3.5-flash"
+
+    QA_DEMO_MODE: bool = False
+    QA_RECORDINGS_DIR: str = "/var/lib/freeswitch/recordings"
+    QA_POLL_INTERVAL_SEC: float = 2.0
+    QA_WINDOW_SEC: float = 6.0
+    QA_WINDOW_OVERLAP_SEC: float = 1.5
+    QA_SILENCE_RMS: float = 350.0
+    QA_MAX_CONCURRENT_AI: int = 8
+    QA_LEADER_LOCK_TTL_SEC: int = 30
+    QA_EVENT_RETENTION_DAYS: int = 30
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
