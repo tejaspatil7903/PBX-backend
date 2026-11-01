@@ -196,11 +196,35 @@ async def evaluate_with_gemini(
         client_kwargs = {}
         if getattr(settings, "GEMINI_API_KEY", ""):
             client_kwargs["api_key"] = settings.GEMINI_API_KEY
-        elif getattr(settings, "GOOGLE_CLOUD_PROJECT", ""):
-            client_kwargs["vertexai"] = True
-            client_kwargs["project"] = settings.GOOGLE_CLOUD_PROJECT
-            if getattr(settings, "GOOGLE_CLOUD_LOCATION", ""):
-                client_kwargs["location"] = settings.GOOGLE_CLOUD_LOCATION
+        else:
+            cred_path = getattr(settings, "GOOGLE_APPLICATION_CREDENTIALS", "")
+            raw_creds_json = getattr(settings, "GOOGLE_APPLICATION_CREDENTIALS_JSON", "")
+            if cred_path and os.path.exists(cred_path):
+                from google.oauth2 import service_account
+                creds = service_account.Credentials.from_service_account_file(
+                    cred_path,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                )
+                client_kwargs["credentials"] = creds
+                client_kwargs["vertexai"] = True
+                client_kwargs["project"] = getattr(settings, "GOOGLE_CLOUD_PROJECT", "") or "cxmdev1"
+                client_kwargs["location"] = getattr(settings, "GOOGLE_CLOUD_LOCATION", "us-central1")
+            elif raw_creds_json:
+                from google.oauth2 import service_account
+                info = json.loads(raw_creds_json) if isinstance(raw_creds_json, str) else raw_creds_json
+                creds = service_account.Credentials.from_service_account_info(
+                    info,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                )
+                client_kwargs["credentials"] = creds
+                client_kwargs["vertexai"] = True
+                client_kwargs["project"] = info.get("project_id", getattr(settings, "GOOGLE_CLOUD_PROJECT", ""))
+                client_kwargs["location"] = getattr(settings, "GOOGLE_CLOUD_LOCATION", "us-central1")
+            elif getattr(settings, "GOOGLE_CLOUD_PROJECT", ""):
+                client_kwargs["vertexai"] = True
+                client_kwargs["project"] = settings.GOOGLE_CLOUD_PROJECT
+                if getattr(settings, "GOOGLE_CLOUD_LOCATION", ""):
+                    client_kwargs["location"] = settings.GOOGLE_CLOUD_LOCATION
 
         if getattr(settings, "GOOGLE_APPLICATION_CREDENTIALS", "") and not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = settings.GOOGLE_APPLICATION_CREDENTIALS
@@ -236,6 +260,20 @@ async def evaluate_with_gemini(
 # 3. ELEVENLABS STT & TTS WITH DISK CACHING
 # =========================================================================
 
+def get_elevenlabs_base_url() -> str:
+    """
+    Returns the appropriate ElevenLabs base URL.
+    Supports data residency suffixes (e.g. sk_..._residency_in -> https://api.in.residency.elevenlabs.io).
+    """
+    if getattr(settings, "ELEVENLABS_API_BASE_URL", ""):
+        return settings.ELEVENLABS_API_BASE_URL.rstrip("/")
+    key = getattr(settings, "ELEVENLABS_API_KEY", "")
+    if "_residency_" in key:
+        region = key.split("_residency_")[-1]
+        return f"https://api.{region}.residency.elevenlabs.io"
+    return "https://api.elevenlabs.io"
+
+
 async def transcribe_elevenlabs_stt(pcm_data: bytes, sample_rate: int = 8000) -> str:
     """
     Transcribes mono PCM audio using ElevenLabs Scribe STT API.
@@ -248,17 +286,20 @@ async def transcribe_elevenlabs_stt(pcm_data: bytes, sample_rate: int = 8000) ->
         samples = np.frombuffer(pcm_data, dtype=np.int16)
         wav_bytes = pcm_to_wav_bytes(samples, sample_rate=sample_rate)
 
+        base_url = get_elevenlabs_base_url()
         async with httpx.AsyncClient(timeout=10.0) as client:
             files = {"file": ("audio.wav", wav_bytes, "audio/wav")}
+            data = {"model_id": getattr(settings, "ELEVENLABS_STT_MODEL", "scribe_v1")}
             headers = {"xi-api-key": settings.ELEVENLABS_API_KEY}
             resp = await client.post(
-                "https://api.elevenlabs.io/v1/speech-to-text",
+                f"{base_url}/v1/speech-to-text",
                 headers=headers,
-                files=files
+                files=files,
+                data=data
             )
             if resp.status_code == 200:
-                data = resp.json()
-                return data.get("text", "").strip()
+                data_json = resp.json()
+                return data_json.get("text", "").strip()
             else:
                 logger.warning(f"ElevenLabs STT error ({resp.status_code}): {resp.text}")
                 return ""
@@ -278,9 +319,13 @@ async def synthesize_elevenlabs_tts(
     Falls back to settings.QA_WARNING_AUDIO_PATH if synthesis fails or API key is absent.
     """
     prompts_dir = os.path.join(settings.QA_RECORDINGS_DIR, "prompts")
-    os.makedirs(prompts_dir, exist_ok=True)
+    try:
+        os.makedirs(prompts_dir, exist_ok=True)
+    except (PermissionError, OSError):
+        prompts_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../..", "recordings", "prompts"))
+        os.makedirs(prompts_dir, exist_ok=True)
 
-    v_id = voice_id or settings.ELEVENLABS_TTS_VOICE_ID or "21m00Tcm4TlvDq8ikWAM"
+    v_id = voice_id or getattr(settings, "ELEVENLABS_VOICE_ID", getattr(settings, "ELEVENLABS_TTS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb"))
     h = hashlib.md5(f"{v_id}:{text}".encode("utf-8")).hexdigest()
     cached_path = os.path.join(prompts_dir, f"qa_{h}.wav")
 
@@ -292,14 +337,15 @@ async def synthesize_elevenlabs_tts(
         return settings.QA_WARNING_AUDIO_PATH
 
     try:
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{v_id}"
+        base_url = get_elevenlabs_base_url()
+        url = f"{base_url}/v1/text-to-speech/{v_id}"
         headers = {
             "xi-api-key": settings.ELEVENLABS_API_KEY,
             "Content-Type": "application/json"
         }
         body = {
             "text": text,
-            "model_id": "eleven_multilingual_v2",
+            "model_id": getattr(settings, "ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5"),
             "voice_settings": {
                 "stability": 0.5,
                 "similarity_boost": 0.75

@@ -45,11 +45,13 @@ class Settings(BaseSettings):
 
     # Virtual QA & AI Settings
     ELEVENLABS_API_KEY: str = ""
+    ELEVENLABS_API_BASE_URL: str = ""
     ELEVENLABS_STT_MODEL: str = "scribe_v1"
     ELEVENLABS_TTS_MODEL: str = "eleven_flash_v2_5"
     ELEVENLABS_VOICE_ID: str = "JBFqnCBsd6RMkjVDRZzb"
     GEMINI_API_KEY: str = ""
     GOOGLE_APPLICATION_CREDENTIALS: str = ""
+    GOOGLE_APPLICATION_CREDENTIALS_JSON: str = ""
     GOOGLE_CLOUD_PROJECT: str = ""
     GOOGLE_CLOUD_LOCATION: str = "global"
     GEMINI_QA_MODEL: str = "gemini-3.5-flash"
