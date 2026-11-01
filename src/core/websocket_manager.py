@@ -174,3 +174,12 @@ class ConnectionManager:
         await self.broadcast(event, tenant_id=target_tenant)
 
 ws_manager = ConnectionManager()
+
+
+async def broadcast_qa_event(
+    tenant_id: str,
+    payload: dict,
+    roles: Tuple[str, ...] = ("supervisor", "admin", "super_admin", "tenant_admin")
+):
+    """Module-level convenience wrapper for ws_manager.broadcast_qa_event."""
+    await ws_manager.broadcast_qa_event(tenant_id, payload, roles=roles)
