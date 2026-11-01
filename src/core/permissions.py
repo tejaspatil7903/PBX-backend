@@ -27,7 +27,10 @@ class CurrentUser:
     def has_module_access(self, module: str) -> bool:
         if self.is_super_admin or str(self.role).upper() == "TENANT_ADMIN":
             return True
-        return module in self.allowed_modules
+        aliases = [module]
+        if module in ("virtual-qa", "qa", "virtualqa", "virtual_qa"):
+            aliases = ["virtual-qa", "qa", "virtualqa", "virtual_qa"]
+        return any(m in self.allowed_modules for m in aliases)
 
 
 async def get_current_user(
@@ -100,6 +103,29 @@ def require_roles(allowed_roles: List[str]):
             )
         return current_user
     return role_checker
+
+
+def require_module(module_name: str, allowed_roles: Optional[List[str]] = None):
+    """
+    Dependency factory enforcing module or role-based access control.
+    Super Admins and Tenant Admins have default full access.
+    Supervisors, Sub-Admins, and users with the module in allowed_modules can also access.
+    """
+    async def module_checker(current_user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+        if current_user.is_super_admin:
+            return current_user
+        role_upper = str(current_user.role).upper()
+        if role_upper == "TENANT_ADMIN":
+            return current_user
+        if allowed_roles and (current_user.role in allowed_roles or role_upper in allowed_roles):
+            return current_user
+        if current_user.has_module_access(module_name):
+            return current_user
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access to '{module_name}' module forbidden for role '{current_user.role}'"
+        )
+    return module_checker
 
 
 def validate_tenant_access(current_user: CurrentUser, target_tenant_id: str):

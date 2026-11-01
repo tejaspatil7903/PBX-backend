@@ -149,6 +149,18 @@ class TestUsersAndIvrEnhancements(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(sub_admin.has_module_access("extensions"))
         self.assertTrue(sub_admin.has_module_access("queues"))
         self.assertFalse(sub_admin.has_module_access("call-routing"))
+        self.assertFalse(sub_admin.has_module_access("virtual-qa"))
+
+        sub_admin_qa = CurrentUser(
+            user_id="sub-2",
+            tenant_id="tenant-1",
+            username="sub2",
+            email="sub2@test.com",
+            role="SUB_ADMIN",
+            allowed_modules=["virtual-qa"]
+        )
+        self.assertTrue(sub_admin_qa.has_module_access("virtual-qa"))
+        self.assertTrue(sub_admin_qa.has_module_access("qa"))
 
         tenant_admin = CurrentUser(
             user_id="admin-1",
@@ -159,4 +171,5 @@ class TestUsersAndIvrEnhancements(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(tenant_admin.has_module_access("call-routing"))
         self.assertTrue(tenant_admin.has_module_access("reports"))
+        self.assertTrue(tenant_admin.has_module_access("virtual-qa"))
 

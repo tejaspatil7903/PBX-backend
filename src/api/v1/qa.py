@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from src.core.config import settings
 from src.core.redis import get_redis
 from src.core.database import execute_query, execute_query_one
-from src.core.permissions import get_current_user, CurrentUser, require_roles
+from src.core.permissions import get_current_user, CurrentUser, require_roles, require_module
 from src.services.virtual_qa_service import qa_service, trigger_qa_violation, synthesize_elevenlabs_tts
 
 logger = logging.getLogger("pbx.api.v1.qa")
@@ -54,7 +54,7 @@ class InterveneRequest(BaseModel):
 
 @router.get("/configs")
 async def list_qa_configs(
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(require_module("virtual-qa", allowed_roles=["SUPER_ADMIN", "TENANT_ADMIN", "SUB_ADMIN", "SUPERVISOR"])),
     tenant_id: Optional[str] = None
 ):
     """Lists Virtual QA configurations for the authenticated tenant."""
@@ -94,7 +94,7 @@ async def list_qa_configs(
 @router.post("/configs")
 async def create_qa_config(
     payload: VirtualQAConfigCreate,
-    current_user: CurrentUser = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_module("virtual-qa", allowed_roles=["SUPER_ADMIN", "TENANT_ADMIN", "SUB_ADMIN"]))
 ):
     """
     Creates a new Virtual QA policy and provisions the extension as a headless virtual agent.
@@ -192,7 +192,7 @@ async def create_qa_config(
 async def update_qa_config(
     config_id: str,
     payload: VirtualQAConfigUpdate,
-    current_user: CurrentUser = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_module("virtual-qa", allowed_roles=["SUPER_ADMIN", "TENANT_ADMIN", "SUB_ADMIN"]))
 ):
     """Updates an existing Virtual QA configuration."""
     tid = current_user.tenant_id
@@ -247,7 +247,7 @@ async def update_qa_config(
 @router.delete("/configs/{config_id}")
 async def delete_qa_config(
     config_id: str,
-    current_user: CurrentUser = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_module("virtual-qa", allowed_roles=["SUPER_ADMIN", "TENANT_ADMIN", "SUB_ADMIN"]))
 ):
     """Soft deletes a Virtual QA configuration."""
     tid = current_user.tenant_id
@@ -270,7 +270,7 @@ async def delete_qa_config(
 @router.get("/active-calls")
 async def get_active_monitored_calls(
     tenant_id: Optional[str] = None,
-    current_user: CurrentUser = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_module("virtual-qa", allowed_roles=["SUPER_ADMIN", "TENANT_ADMIN", "SUB_ADMIN", "SUPERVISOR"]))
 ):
     """
     Returns active calls currently monitored by Virtual QA for dashboard hydration.
@@ -315,7 +315,7 @@ async def get_active_monitored_calls(
 async def supervisor_intervene(
     call_uuid: str,
     mode: str = Query("whisper", pattern="^(listen|whisper|barge)$"),
-    current_user: CurrentUser = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_module("virtual-qa", allowed_roles=["SUPER_ADMIN", "TENANT_ADMIN", "SUB_ADMIN", "SUPERVISOR"]))
 ):
     """
     Initiates live supervisor intervention (listen, whisper, barge) via FreeSWITCH eavesdrop originate.
@@ -325,6 +325,12 @@ async def supervisor_intervene(
     redis_client = await r_obj if hasattr(r_obj, "__await__") else r_obj
     if not redis_client:
         raise HTTPException(status_code=503, detail="Redis unavailable")
+
+    if not tid and current_user.is_super_admin:
+        keys = await redis_client.keys(f"tenant:*:qa_call:{call_uuid}")
+        if keys:
+            first_key = keys[0].decode("utf-8") if isinstance(keys[0], bytes) else keys[0]
+            tid = first_key.split(":")[1]
 
     call_data = await redis_client.hgetall(f"tenant:{tid}:qa_call:{call_uuid}")
     if not call_data:
@@ -403,7 +409,7 @@ async def supervisor_intervene(
 @router.post("/calls/{call_uuid}/simulate-violation")
 async def simulate_violation(
     call_uuid: str,
-    current_user: CurrentUser = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_module("virtual-qa", allowed_roles=["SUPER_ADMIN", "TENANT_ADMIN", "SUB_ADMIN", "SUPERVISOR"]))
 ):
     """
     Demo/testing endpoint to trigger a simulated violation on an active call.
@@ -415,6 +421,12 @@ async def simulate_violation(
     tid = current_user.tenant_id
     r_obj = get_redis()
     redis_client = await r_obj if hasattr(r_obj, "__await__") else r_obj
+    if not tid and current_user.is_super_admin:
+        keys = await redis_client.keys(f"tenant:*:qa_call:{call_uuid}") if redis_client else []
+        if keys:
+            first_key = keys[0].decode("utf-8") if isinstance(keys[0], bytes) else keys[0]
+            tid = first_key.split(":")[1]
+
     call_data = await redis_client.hgetall(f"tenant:{tid}:qa_call:{call_uuid}") if redis_client else None
     if not call_data:
         raise HTTPException(status_code=404, detail="Call not found")
@@ -455,7 +467,7 @@ async def list_qa_events(
     tenant_id: Optional[str] = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    current_user: CurrentUser = Depends(get_current_user)
+    current_user: CurrentUser = Depends(require_module("virtual-qa", allowed_roles=["SUPER_ADMIN", "TENANT_ADMIN", "SUB_ADMIN", "SUPERVISOR"]))
 ):
     """Returns paginated QA audit events for the tenant."""
     tid = tenant_id if current_user.is_super_admin and tenant_id else current_user.tenant_id
