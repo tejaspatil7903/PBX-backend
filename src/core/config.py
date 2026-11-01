@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GOOGLE_APPLICATION_CREDENTIALS: str = ""
     GOOGLE_APPLICATION_CREDENTIALS_JSON: str = ""
+    GEMINI_LLM_APPLICATION_CREDENTIALS_JSON: str = ""
     GOOGLE_CLOUD_PROJECT: str = ""
     GOOGLE_CLOUD_LOCATION: str = "global"
     GEMINI_QA_MODEL: str = "gemini-3.5-flash"

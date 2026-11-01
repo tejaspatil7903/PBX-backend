@@ -198,7 +198,7 @@ async def evaluate_with_gemini(
             client_kwargs["api_key"] = settings.GEMINI_API_KEY
         else:
             cred_path = getattr(settings, "GOOGLE_APPLICATION_CREDENTIALS", "")
-            raw_creds_json = getattr(settings, "GOOGLE_APPLICATION_CREDENTIALS_JSON", "")
+            raw_creds_json = getattr(settings, "GEMINI_LLM_APPLICATION_CREDENTIALS_JSON", "") or getattr(settings, "GOOGLE_APPLICATION_CREDENTIALS_JSON", "")
             if cred_path and os.path.exists(cred_path):
                 from google.oauth2 import service_account
                 creds = service_account.Credentials.from_service_account_file(
