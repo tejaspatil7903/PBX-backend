@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     ELEVENLABS_STT_MODEL: str = "scribe_v1"
     ELEVENLABS_TTS_MODEL: str = "eleven_flash_v2_5"
     ELEVENLABS_VOICE_ID: str = "JBFqnCBsd6RMkjVDRZzb"
+    GEMINI_API_KEY: str = ""
     GOOGLE_APPLICATION_CREDENTIALS: str = ""
     GOOGLE_CLOUD_PROJECT: str = ""
     GOOGLE_CLOUD_LOCATION: str = "global"

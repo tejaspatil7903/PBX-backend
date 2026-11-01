@@ -193,7 +193,19 @@ async def evaluate_with_gemini(
     )
 
     try:
-        client = genai.Client()
+        client_kwargs = {}
+        if getattr(settings, "GEMINI_API_KEY", ""):
+            client_kwargs["api_key"] = settings.GEMINI_API_KEY
+        elif getattr(settings, "GOOGLE_CLOUD_PROJECT", ""):
+            client_kwargs["vertexai"] = True
+            client_kwargs["project"] = settings.GOOGLE_CLOUD_PROJECT
+            if getattr(settings, "GOOGLE_CLOUD_LOCATION", ""):
+                client_kwargs["location"] = settings.GOOGLE_CLOUD_LOCATION
+
+        if getattr(settings, "GOOGLE_APPLICATION_CREDENTIALS", "") and not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = settings.GOOGLE_APPLICATION_CREDENTIALS
+
+        client = genai.Client(**client_kwargs) if client_kwargs else genai.Client()
         gemini_model = getattr(settings, "GEMINI_QA_MODEL", getattr(settings, "GEMINI_MODEL", "gemini-3.5-flash"))
         response = client.models.generate_content(
             model=gemini_model,

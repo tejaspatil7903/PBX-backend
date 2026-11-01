@@ -10,7 +10,8 @@ class TestVirtualQASchemaAndConfig(unittest.TestCase):
         self.assertEqual(settings.ELEVENLABS_TTS_MODEL, "eleven_flash_v2_5")
         self.assertEqual(settings.ELEVENLABS_VOICE_ID, "JBFqnCBsd6RMkjVDRZzb")
 
-        # Google Vertex AI settings
+        # Google Gemini & Vertex AI settings
+        self.assertTrue(hasattr(settings, "GEMINI_API_KEY"))
         self.assertTrue(hasattr(settings, "GOOGLE_APPLICATION_CREDENTIALS"))
         self.assertTrue(hasattr(settings, "GOOGLE_CLOUD_PROJECT"))
         self.assertEqual(settings.GOOGLE_CLOUD_LOCATION, "global")
