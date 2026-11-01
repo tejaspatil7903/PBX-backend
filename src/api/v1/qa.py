@@ -59,19 +59,35 @@ async def list_qa_configs(
 ):
     """Lists Virtual QA configurations for the authenticated tenant."""
     tid = tenant_id if current_user.is_super_admin and tenant_id else current_user.tenant_id
-    if not tid:
+    if tid:
+        configs = await execute_query(
+            """
+            SELECT c.*, e.extension_number as qa_extension_number, e.display_name as qa_extension_name,
+                   t.name as tenant_name, t.domain as tenant_domain
+            FROM virtual_qa_configs c
+            JOIN extensions e ON c.qa_extension_id = e.id
+            LEFT JOIN tenants t ON c.tenant_id = t.id
+            WHERE c.tenant_id = CAST(:tid AS uuid) AND c.deleted_at IS NULL
+            ORDER BY c.created_at DESC
+            """,
+            {"tid": tid}
+        )
+    elif current_user.is_super_admin:
+        configs = await execute_query(
+            """
+            SELECT c.*, e.extension_number as qa_extension_number, e.display_name as qa_extension_name,
+                   t.name as tenant_name, t.domain as tenant_domain
+            FROM virtual_qa_configs c
+            JOIN extensions e ON c.qa_extension_id = e.id
+            LEFT JOIN tenants t ON c.tenant_id = t.id
+            WHERE c.deleted_at IS NULL
+            ORDER BY c.created_at DESC
+            """,
+            {}
+        )
+    else:
         raise HTTPException(status_code=400, detail="Tenant context required")
 
-    configs = await execute_query(
-        """
-        SELECT c.*, e.extension_number as qa_extension_number, e.display_name as qa_extension_name
-        FROM virtual_qa_configs c
-        JOIN extensions e ON c.qa_extension_id = e.id
-        WHERE c.tenant_id = CAST(:tid AS uuid) AND c.deleted_at IS NULL
-        ORDER BY c.created_at DESC
-        """,
-        {"tid": tid}
-    )
     return configs
 
 
@@ -87,7 +103,6 @@ async def create_qa_config(
     if not tid:
         raise HTTPException(status_code=400, detail="Tenant context required")
 
-    # 1. Look up extension to turn into Virtual QA Bot
     ext = await execute_query_one(
         """
         SELECT id, extension_number, is_virtual FROM extensions
@@ -97,18 +112,36 @@ async def create_qa_config(
         {"tid": tid, "ext_num": payload.qa_extension_number}
     )
     if not ext:
-        raise HTTPException(status_code=404, detail=f"Extension {payload.qa_extension_number} not found in tenant")
+        # Auto-create headless virtual extension for this tenant
+        ext = await execute_query_one(
+            """
+            INSERT INTO extensions (
+                tenant_id, extension_number, display_name, sip_password, voicemail_pin,
+                is_virtual, webrtc_enabled, enabled
+            ) VALUES (
+                CAST(:tid AS uuid), :ext_num, :name, :sip_pwd, '1234',
+                true, false, true
+            )
+            RETURNING id, extension_number, is_virtual
+            """,
+            {
+                "tid": tid,
+                "ext_num": payload.qa_extension_number,
+                "name": f"Virtual QA Bot ({payload.qa_extension_number})",
+                "sip_pwd": "virtual-qa-disabled-pwd",
+            }
+        )
+    else:
+        # 2. Mark extension is_virtual = true and suppress registration
+        await execute_query(
+            """
+            UPDATE extensions SET is_virtual = true, updated_at = NOW()
+            WHERE id = CAST(:id AS uuid)
+            """,
+            {"id": str(ext["id"])}
+        )
 
     ext_id = str(ext["id"])
-
-    # 2. Mark extension is_virtual = true and suppress registration
-    await execute_query(
-        """
-        UPDATE extensions SET is_virtual = true, updated_at = NOW()
-        WHERE id = CAST(:id AS uuid)
-        """,
-        {"id": ext_id}
-    )
 
     # 3. Clean banned keywords
     cleaned_keywords = [kw.strip().lower() for kw in payload.banned_keywords if kw.strip()]
@@ -231,21 +264,26 @@ async def delete_qa_config(
 
 @router.get("/active-calls")
 async def get_active_monitored_calls(
+    tenant_id: Optional[str] = None,
     current_user: CurrentUser = Depends(get_current_user)
 ):
     """
     Returns active calls currently monitored by Virtual QA for dashboard hydration.
     """
-    tid = current_user.tenant_id
-    if not tid:
-        return []
+    tid = tenant_id if current_user.is_super_admin and tenant_id else current_user.tenant_id
 
     r_obj = get_redis()
     redis_client = await r_obj if hasattr(r_obj, "__await__") else r_obj
     if not redis_client:
         return []
 
-    pattern = f"tenant:{tid}:qa_call:*"
+    if tid:
+        pattern = f"tenant:{tid}:qa_call:*"
+    elif current_user.is_super_admin:
+        pattern = "tenant:*:qa_call:*"
+    else:
+        return []
+
     keys = await redis_client.keys(pattern)
     active_calls = []
 
@@ -409,14 +447,21 @@ async def simulate_violation(
 async def list_qa_events(
     call_uuid: Optional[str] = None,
     event_type: Optional[str] = None,
+    tenant_id: Optional[str] = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     current_user: CurrentUser = Depends(get_current_user)
 ):
     """Returns paginated QA audit events for the tenant."""
-    tid = current_user.tenant_id
-    clauses = ["tenant_id = CAST(:tid AS uuid)"]
-    params = {"tid": tid, "limit": limit, "offset": offset}
+    tid = tenant_id if current_user.is_super_admin and tenant_id else current_user.tenant_id
+    clauses = []
+    params = {"limit": limit, "offset": offset}
+
+    if tid:
+        clauses.append("tenant_id = CAST(:tid AS uuid)")
+        params["tid"] = tid
+    elif not current_user.is_super_admin:
+        raise HTTPException(status_code=400, detail="Tenant context required")
 
     if call_uuid:
         clauses.append("call_uuid = :call_uuid")
@@ -425,12 +470,13 @@ async def list_qa_events(
         clauses.append("event_type = :event_type")
         params["event_type"] = event_type
 
+    where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = f"""
         SELECT id, tenant_id, call_uuid, event_type, agent_extension,
                warn_count, transcript, coaching_message, audio_file_path,
                details, created_at
         FROM qa_events
-        WHERE {' AND '.join(clauses)}
+        {where_clause}
         ORDER BY created_at DESC
         LIMIT :limit OFFSET :offset
     """
