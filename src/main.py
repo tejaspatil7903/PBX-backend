@@ -39,9 +39,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Initial gateway sync warning: {e}")
     
+    # Start Redis Pub/Sub listener for cross-worker QA and telemetry events
+    redis_listener_task = asyncio.create_task(ws_manager.start_redis_listener())
+
     yield
     
     logger.info("Shutting down Multi-Tenant PBX API Control Plane...")
+    if redis_listener_task:
+        redis_listener_task.cancel()
     # Close Redis & Database Pools
     await close_redis()
     await engine.dispose()
@@ -106,17 +111,19 @@ async def websocket_reports_endpoint(websocket: WebSocket):
     user_tenant_id = None
     is_admin = False
 
+    user_role = "agent"
     if token:
         try:
             payload = decode_token(token)
             if payload:
                 user_tenant_id = payload.get("tenant_id")
                 role = str(payload.get("role") or "").lower()
+                user_role = role
                 is_admin = (role in ("admin", "super_admin", "superadmin")) or (user_tenant_id is None)
         except Exception as e:
             logger.warning(f"WebSocket token decode failure: {e}")
 
-    await ws_manager.connect(websocket, tenant_id=user_tenant_id, is_admin=is_admin)
+    await ws_manager.connect(websocket, tenant_id=user_tenant_id, is_admin=is_admin, role=user_role)
     try:
         while True:
             data = await websocket.receive_text()
