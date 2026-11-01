@@ -411,6 +411,12 @@ async def trigger_qa_violation(
     if redis_client is None:
         r_obj = get_redis()
         redis_client = await r_obj if hasattr(r_obj, "__await__") else r_obj
+        if redis_client is None:
+            try:
+                import redis.asyncio as aioredis
+                redis_client = aioredis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
+            except Exception:
+                pass
 
     # 1. Atomic Cooldown Lock
     cd_key = f"tenant:{tenant_id}:qa_cd:{call_uuid}"
