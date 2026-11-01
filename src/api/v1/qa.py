@@ -1,0 +1,438 @@
+import json
+import logging
+from typing import Optional, List, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from pydantic import BaseModel, Field
+
+from src.core.config import settings
+from src.core.redis import get_redis
+from src.core.database import execute_query, execute_query_one
+from src.core.permissions import get_current_user, CurrentUser, require_roles
+from src.services.virtual_qa_service import qa_service, trigger_qa_violation, synthesize_elevenlabs_tts
+
+logger = logging.getLogger("pbx.api.v1.qa")
+
+router = APIRouter(prefix="/qa", tags=["Virtual QA & Monitoring"])
+
+
+# =========================================================================
+# SCHEMAS
+# =========================================================================
+
+class VirtualQAConfigCreate(BaseModel):
+    tenant_id: Optional[str] = None
+    qa_extension_number: str = Field(..., description="Extension number to assign as headless virtual QA bot")
+    max_warn_retries: int = Field(3, ge=1, le=10)
+    cooldown_seconds: int = Field(10, ge=3, le=120)
+    supervisor_extension: Optional[str] = None
+    monitored_agents: List[str] = Field(default_factory=list)
+    monitored_callers: List[str] = Field(default_factory=lambda: ["*"])
+    policy_prompt: Optional[str] = None
+    banned_keywords: List[str] = Field(default_factory=list)
+    enabled: bool = True
+
+
+class VirtualQAConfigUpdate(BaseModel):
+    max_warn_retries: Optional[int] = Field(None, ge=1, le=10)
+    cooldown_seconds: Optional[int] = Field(None, ge=3, le=120)
+    supervisor_extension: Optional[str] = None
+    monitored_agents: Optional[List[str]] = None
+    monitored_callers: Optional[List[str]] = None
+    policy_prompt: Optional[str] = None
+    banned_keywords: Optional[List[str]] = None
+    enabled: Optional[bool] = None
+
+
+class InterveneRequest(BaseModel):
+    mode: str = Field("whisper", pattern="^(listen|whisper|barge)$")
+    supervisor_extension: Optional[str] = None
+
+
+# =========================================================================
+# ENDPOINTS
+# =========================================================================
+
+@router.get("/configs")
+async def list_qa_configs(
+    current_user: CurrentUser = Depends(get_current_user),
+    tenant_id: Optional[str] = None
+):
+    """Lists Virtual QA configurations for the authenticated tenant."""
+    tid = tenant_id if current_user.is_super_admin and tenant_id else current_user.tenant_id
+    if not tid:
+        raise HTTPException(status_code=400, detail="Tenant context required")
+
+    configs = await execute_query(
+        """
+        SELECT c.*, e.extension_number as qa_extension_number, e.display_name as qa_extension_name
+        FROM virtual_qa_configs c
+        JOIN extensions e ON c.qa_extension_id = e.id
+        WHERE c.tenant_id = CAST(:tid AS uuid) AND c.deleted_at IS NULL
+        ORDER BY c.created_at DESC
+        """,
+        {"tid": tid}
+    )
+    return configs
+
+
+@router.post("/configs")
+async def create_qa_config(
+    payload: VirtualQAConfigCreate,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Creates a new Virtual QA policy and provisions the extension as a headless virtual agent.
+    """
+    tid = payload.tenant_id if current_user.is_super_admin and payload.tenant_id else current_user.tenant_id
+    if not tid:
+        raise HTTPException(status_code=400, detail="Tenant context required")
+
+    # 1. Look up extension to turn into Virtual QA Bot
+    ext = await execute_query_one(
+        """
+        SELECT id, extension_number, is_virtual FROM extensions
+        WHERE tenant_id = CAST(:tid AS uuid) AND extension_number = :ext_num AND deleted_at IS NULL
+        LIMIT 1
+        """,
+        {"tid": tid, "ext_num": payload.qa_extension_number}
+    )
+    if not ext:
+        raise HTTPException(status_code=404, detail=f"Extension {payload.qa_extension_number} not found in tenant")
+
+    ext_id = str(ext["id"])
+
+    # 2. Mark extension is_virtual = true and suppress registration
+    await execute_query(
+        """
+        UPDATE extensions SET is_virtual = true, updated_at = NOW()
+        WHERE id = CAST(:id AS uuid)
+        """,
+        {"id": ext_id}
+    )
+
+    # 3. Clean banned keywords
+    cleaned_keywords = [kw.strip().lower() for kw in payload.banned_keywords if kw.strip()]
+
+    # 4. Pre-cache standard warning templates
+    for i in range(1, payload.max_warn_retries + 1):
+        sample_whisper = f"Warning {i} of {payload.max_warn_retries}. Please maintain professional standards."
+        try:
+            await synthesize_elevenlabs_tts(sample_whisper, tenant_id=tid)
+        except Exception:
+            pass
+
+    # 5. Insert configuration row
+    new_cfg = await execute_query_one(
+        """
+        INSERT INTO virtual_qa_configs (
+            tenant_id, qa_extension_id, max_warn_retries, cooldown_seconds,
+            supervisor_extension, monitored_agents, monitored_callers,
+            policy_prompt, banned_keywords, enabled
+        ) VALUES (
+            CAST(:tid AS uuid), CAST(:ext_id AS uuid), :retries, :cooldown,
+            :sup_ext, CAST(:agents AS jsonb), CAST(:callers AS jsonb),
+            :policy, CAST(:keywords AS jsonb), :enabled
+        )
+        RETURNING *
+        """,
+        {
+            "tid": tid,
+            "ext_id": ext_id,
+            "retries": payload.max_warn_retries,
+            "cooldown": payload.cooldown_seconds,
+            "sup_ext": payload.supervisor_extension,
+            "agents": json.dumps(payload.monitored_agents),
+            "callers": json.dumps(payload.monitored_callers),
+            "policy": payload.policy_prompt,
+            "keywords": json.dumps(cleaned_keywords),
+            "enabled": payload.enabled
+        }
+    )
+    return new_cfg
+
+
+@router.put("/configs/{config_id}")
+async def update_qa_config(
+    config_id: str,
+    payload: VirtualQAConfigUpdate,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """Updates an existing Virtual QA configuration."""
+    tid = current_user.tenant_id
+    existing = await execute_query_one(
+        "SELECT * FROM virtual_qa_configs WHERE id = CAST(:id AS uuid) AND deleted_at IS NULL",
+        {"id": config_id}
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Configuration not found")
+    if not current_user.is_super_admin and str(existing["tenant_id"]) != tid:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    updates = []
+    params = {"id": config_id}
+
+    if payload.max_warn_retries is not None:
+        updates.append("max_warn_retries = :retries")
+        params["retries"] = payload.max_warn_retries
+    if payload.cooldown_seconds is not None:
+        updates.append("cooldown_seconds = :cooldown")
+        params["cooldown"] = payload.cooldown_seconds
+    if payload.supervisor_extension is not None:
+        updates.append("supervisor_extension = :sup_ext")
+        params["sup_ext"] = payload.supervisor_extension
+    if payload.monitored_agents is not None:
+        updates.append("monitored_agents = CAST(:agents AS jsonb)")
+        params["agents"] = json.dumps(payload.monitored_agents)
+    if payload.monitored_callers is not None:
+        updates.append("monitored_callers = CAST(:callers AS jsonb)")
+        params["callers"] = json.dumps(payload.monitored_callers)
+    if payload.policy_prompt is not None:
+        updates.append("policy_prompt = :policy")
+        params["policy"] = payload.policy_prompt
+    if payload.banned_keywords is not None:
+        cleaned = [k.strip().lower() for k in payload.banned_keywords if k.strip()]
+        updates.append("banned_keywords = CAST(:keywords AS jsonb)")
+        params["keywords"] = json.dumps(cleaned)
+    if payload.enabled is not None:
+        updates.append("enabled = :enabled")
+        params["enabled"] = payload.enabled
+
+    if not updates:
+        return existing
+
+    updates.append("updated_at = NOW()")
+    sql = f"UPDATE virtual_qa_configs SET {', '.join(updates)} WHERE id = CAST(:id AS uuid) RETURNING *"
+    res = await execute_query_one(sql, params)
+    return res
+
+
+@router.delete("/configs/{config_id}")
+async def delete_qa_config(
+    config_id: str,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """Soft deletes a Virtual QA configuration."""
+    tid = current_user.tenant_id
+    existing = await execute_query_one(
+        "SELECT tenant_id FROM virtual_qa_configs WHERE id = CAST(:id AS uuid) AND deleted_at IS NULL",
+        {"id": config_id}
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Configuration not found")
+    if not current_user.is_super_admin and str(existing["tenant_id"]) != tid:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    await execute_query(
+        "UPDATE virtual_qa_configs SET deleted_at = NOW(), enabled = false WHERE id = CAST(:id AS uuid)",
+        {"id": config_id}
+    )
+    return {"status": "deleted", "id": config_id}
+
+
+@router.get("/active-calls")
+async def get_active_monitored_calls(
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Returns active calls currently monitored by Virtual QA for dashboard hydration.
+    """
+    tid = current_user.tenant_id
+    if not tid:
+        return []
+
+    r_obj = get_redis()
+    redis_client = await r_obj if hasattr(r_obj, "__await__") else r_obj
+    if not redis_client:
+        return []
+
+    pattern = f"tenant:{tid}:qa_call:*"
+    keys = await redis_client.keys(pattern)
+    active_calls = []
+
+    for k in keys:
+        if isinstance(k, bytes):
+            k = k.decode("utf-8")
+        data = await redis_client.hgetall(k)
+        if data:
+            active_calls.append({
+                "call_uuid": data.get("call_uuid"),
+                "tenant_id": data.get("tenant_id"),
+                "agent_extension": data.get("agent_ext"),
+                "customer_extension": data.get("customer_ext"),
+                "agent_leg": data.get("agent_leg"),
+                "warn_count": int(data.get("warn_count", 0)),
+                "escalated": bool(int(data.get("escalated", 0))),
+                "started_at": float(data.get("started_at", 0))
+            })
+
+    return active_calls
+
+
+@router.post("/calls/{call_uuid}/intervene")
+async def supervisor_intervene(
+    call_uuid: str,
+    mode: str = Query("whisper", pattern="^(listen|whisper|barge)$"),
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Initiates live supervisor intervention (listen, whisper, barge) via FreeSWITCH eavesdrop originate.
+    """
+    tid = current_user.tenant_id
+    r_obj = get_redis()
+    redis_client = await r_obj if hasattr(r_obj, "__await__") else r_obj
+    if not redis_client:
+        raise HTTPException(status_code=503, detail="Redis unavailable")
+
+    call_data = await redis_client.hgetall(f"tenant:{tid}:qa_call:{call_uuid}")
+    if not call_data:
+        raise HTTPException(status_code=404, detail="Active call not found")
+
+    agent_leg = str(call_data.get("agent_leg", "bleg")).lower()
+
+    # Look up supervisor extension & tenant sip_domain
+    tenant_row = await execute_query_one(
+        "SELECT sip_domain FROM tenants WHERE id = CAST(:tid AS uuid)",
+        {"tid": tid}
+    )
+    sip_domain = tenant_row.get("sip_domain") if tenant_row else "pbx.terrixai.com"
+
+    # Default supervisor extension
+    sup_ext = "9001"
+    # Or query user extension
+    user_ext = await execute_query_one(
+        "SELECT extension_number FROM extensions WHERE tenant_id = CAST(:tid AS uuid) AND email = :email LIMIT 1",
+        {"tid": tid, "email": current_user.email}
+    )
+    if user_ext and user_ext.get("extension_number"):
+        sup_ext = user_ext["extension_number"]
+
+    # Build originate eavesdrop command
+    flags = ["eavesdrop_enable_dtmf=true", "originate_timeout=25", "ignore_early_media=true"]
+    if mode == "whisper":
+        if agent_leg in ("aleg", "0", "left"):
+            flags.append("eavesdrop_whisper_aleg=true")
+        else:
+            flags.append("eavesdrop_whisper_bleg=true")
+    elif mode == "listen":
+        flags.append("eavesdrop_hide=true")
+    # barge: no whisper flags, bidirectional bridge
+
+    flags_str = ",".join(flags)
+    cmd = f"bgapi originate {{{flags_str}}}user/{sup_ext}@{sip_domain} &eavesdrop({call_uuid})"
+    logger.info(f"Supervisor {current_user.email} initiating {mode} intervention: {cmd}")
+
+    try:
+        await qa_service.api(cmd)
+    except Exception as err:
+        logger.warning(f"ESL originate dispatch warning: {err}")
+
+    # Audit row
+    try:
+        await execute_query(
+            """
+            INSERT INTO qa_events (
+                tenant_id, call_uuid, event_type, agent_extension,
+                coaching_message, details
+            ) VALUES (
+                CAST(:tid AS uuid), :uuid, 'intervention', :agent_ext,
+                :msg, CAST(:details AS jsonb)
+            )
+            """,
+            {
+                "tid": tid,
+                "uuid": call_uuid,
+                "agent_ext": call_data.get("agent_ext", ""),
+                "msg": f"Supervisor intervention mode='{mode}'",
+                "details": json.dumps({"mode": mode, "supervisor_ext": sup_ext, "user_id": current_user.user_id})
+            }
+        )
+    except Exception as db_err:
+        logger.error(f"Failed to record intervention event: {db_err}")
+
+    return {
+        "status": "intervention_initiated",
+        "call_uuid": call_uuid,
+        "mode": mode,
+        "supervisor_extension": sup_ext
+    }
+
+
+@router.post("/calls/{call_uuid}/simulate-violation")
+async def simulate_violation(
+    call_uuid: str,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Demo/testing endpoint to trigger a simulated violation on an active call.
+    Gated strictly by QA_DEMO_MODE=True.
+    """
+    if not settings.QA_DEMO_MODE:
+        raise HTTPException(status_code=404, detail="Demo simulation endpoint disabled in production")
+
+    tid = current_user.tenant_id
+    r_obj = get_redis()
+    redis_client = await r_obj if hasattr(r_obj, "__await__") else r_obj
+    call_data = await redis_client.hgetall(f"tenant:{tid}:qa_call:{call_uuid}") if redis_client else None
+    if not call_data:
+        raise HTTPException(status_code=404, detail="Call not found")
+
+    call_info = {
+        "call_uuid": call_uuid,
+        "tenant_id": tid,
+        "qa_agent_ext": call_data.get("agent_ext", "1001"),
+        "qa_customer_ext": call_data.get("customer_ext", "1002"),
+        "qa_agent_leg": call_data.get("agent_leg", "bleg"),
+        "qa_config_id": call_data.get("config_id"),
+        "max_warn_retries": 3,
+        "cooldown_seconds": 10,
+        "qa_supervisor_ext": "9001"
+    }
+    violation = {
+        "violation": True,
+        "type": "simulated",
+        "keyword": "simulated_violation",
+        "reason": "Simulated policy violation triggered via API",
+        "coaching": "This is a simulated warning. Please maintain call quality standards."
+    }
+
+    res = await trigger_qa_violation(
+        call_info=call_info,
+        violation_data=violation,
+        transcript="Simulated test transcript containing a policy breach.",
+        redis_client=redis_client,
+        esl_client=qa_service
+    )
+    return {"status": "simulated", "result": res}
+
+
+@router.get("/events")
+async def list_qa_events(
+    call_uuid: Optional[str] = None,
+    event_type: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """Returns paginated QA audit events for the tenant."""
+    tid = current_user.tenant_id
+    clauses = ["tenant_id = CAST(:tid AS uuid)"]
+    params = {"tid": tid, "limit": limit, "offset": offset}
+
+    if call_uuid:
+        clauses.append("call_uuid = :call_uuid")
+        params["call_uuid"] = call_uuid
+    if event_type:
+        clauses.append("event_type = :event_type")
+        params["event_type"] = event_type
+
+    sql = f"""
+        SELECT id, tenant_id, call_uuid, event_type, agent_extension,
+               warn_count, transcript, coaching_message, audio_file_path,
+               details, created_at
+        FROM qa_events
+        WHERE {' AND '.join(clauses)}
+        ORDER BY created_at DESC
+        LIMIT :limit OFFSET :offset
+    """
+    events = await execute_query(sql, params)
+    return events
