@@ -43,9 +43,21 @@ async def lifespan(app: FastAPI):
     # Start Redis Pub/Sub listener for cross-worker QA and telemetry events
     redis_listener_task = asyncio.create_task(ws_manager.start_redis_listener())
 
+    # Start Virtual QA Service (FreeSWITCH ESL listener & audio analysis worker)
+    from src.services.virtual_qa_service import qa_service
+    try:
+        await qa_service.start()
+        logger.info("Virtual QA Service initialized and listening to FreeSWITCH ESL.")
+    except Exception as e:
+        logger.warning(f"Virtual QA service startup warning: {e}")
+
     yield
     
     logger.info("Shutting down Multi-Tenant PBX API Control Plane...")
+    try:
+        await qa_service.stop()
+    except Exception:
+        pass
     if redis_listener_task:
         redis_listener_task.cancel()
     # Close Redis & Database Pools

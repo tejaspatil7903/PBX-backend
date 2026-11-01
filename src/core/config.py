@@ -59,10 +59,13 @@ class Settings(BaseSettings):
 
     QA_DEMO_MODE: bool = False
     QA_RECORDINGS_DIR: str = "/var/lib/freeswitch/recordings"
+    QA_WARNING_AUDIO_PATH: str = "/var/lib/freeswitch/recordings/prompts/default_warning.wav"
     QA_POLL_INTERVAL_SEC: float = 2.0
     QA_WINDOW_SEC: float = 6.0
     QA_WINDOW_OVERLAP_SEC: float = 1.5
     QA_SILENCE_RMS: float = 350.0
+    QA_AUDIO_SILENCE_RMS: float = 350.0
+    QA_AUDIO_TAIL_INTERVAL_MS: int = 500
     QA_MAX_CONCURRENT_AI: int = 8
     QA_LEADER_LOCK_TTL_SEC: int = 30
     QA_EVENT_RETENTION_DAYS: int = 30

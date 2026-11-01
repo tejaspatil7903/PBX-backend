@@ -625,19 +625,10 @@ class VirtualQAService:
 
     async def api(self, command: str) -> str:
         """Sends an API command to FreeSWITCH over ESL and reads the response."""
-        if not self.esl_writer:
-            raise ConnectionError("ESL writer not connected")
-        self.esl_writer.write(f"api {command}\n\n".encode("utf-8"))
-        await self.esl_writer.drain()
-        
-        # Read header and body
-        response_lines = []
-        while True:
-            line = await self.esl_reader.readline()
-            if not line or line == b"\n":
-                break
-            response_lines.append(line.decode("utf-8", errors="ignore"))
-        return "".join(response_lines)
+        from src.services.gateway_sync import execute_esl_command
+        loop = asyncio.get_running_loop()
+        res = await loop.run_in_executor(None, execute_esl_command, command)
+        return res or ""
 
     async def start(self):
         self.running = True
@@ -790,17 +781,25 @@ class VirtualQAService:
     async def _tail_audio_worker(self, call_info: Dict[str, Any]):
         call_uuid = call_info["call_uuid"]
         tenant_id = call_info["tenant_id"]
-        rec_dir = os.path.join(settings.QA_RECORDINGS_DIR, tenant_id)
-        rec_path = os.path.join(rec_dir, f"{call_uuid}.wav")
+        rec_dir = os.path.join(settings.QA_RECORDINGS_DIR, tenant_id) if tenant_id else settings.QA_RECORDINGS_DIR
+        candidate_paths = [
+            os.path.join(rec_dir, f"{call_uuid}.wav"),
+            os.path.join(settings.QA_RECORDINGS_DIR, f"{call_uuid}.wav"),
+        ]
 
         # Wait for recording file to exist
+        rec_path = None
         for _ in range(60):
-            if os.path.exists(rec_path) and os.path.getsize(rec_path) >= 44:
+            for cp in candidate_paths:
+                if os.path.exists(cp) and os.path.getsize(cp) >= 44:
+                    rec_path = cp
+                    break
+            if rec_path:
                 break
             await asyncio.sleep(0.5)
 
-        if not os.path.exists(rec_path):
-            logger.warning(f"Audio file {rec_path} never created for call {call_uuid}")
+        if not rec_path or not os.path.exists(rec_path):
+            logger.warning(f"Audio file for call {call_uuid} never created in {candidate_paths}")
             return
 
         try:
