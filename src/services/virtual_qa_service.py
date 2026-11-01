@@ -203,34 +203,47 @@ async def evaluate_with_gemini(
                 from google.oauth2 import service_account
                 creds = service_account.Credentials.from_service_account_file(
                     cred_path,
-                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                    scopes=[
+                        "https://www.googleapis.com/auth/generative-language",
+                        "https://www.googleapis.com/auth/cloud-platform"
+                    ]
                 )
                 client_kwargs["credentials"] = creds
                 client_kwargs["vertexai"] = True
                 client_kwargs["project"] = getattr(settings, "GOOGLE_CLOUD_PROJECT", "") or "cxmdev1"
-                client_kwargs["location"] = getattr(settings, "GOOGLE_CLOUD_LOCATION", "us-central1")
+                loc = getattr(settings, "GOOGLE_CLOUD_LOCATION", "").strip()
+                if loc:
+                    client_kwargs["location"] = loc
             elif raw_creds_json:
                 from google.oauth2 import service_account
-                info = json.loads(raw_creds_json) if isinstance(raw_creds_json, str) else raw_creds_json
+                info = json.loads(raw_creds_json.strip("'").strip('"')) if isinstance(raw_creds_json, str) else raw_creds_json
+                if isinstance(info, dict) and "private_key" in info and isinstance(info["private_key"], str):
+                    info["private_key"] = info["private_key"].replace("\\n", "\n")
                 creds = service_account.Credentials.from_service_account_info(
                     info,
-                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                    scopes=[
+                        "https://www.googleapis.com/auth/generative-language",
+                        "https://www.googleapis.com/auth/cloud-platform"
+                    ]
                 )
                 client_kwargs["credentials"] = creds
                 client_kwargs["vertexai"] = True
                 client_kwargs["project"] = info.get("project_id", getattr(settings, "GOOGLE_CLOUD_PROJECT", ""))
-                client_kwargs["location"] = getattr(settings, "GOOGLE_CLOUD_LOCATION", "us-central1")
+                loc = getattr(settings, "GOOGLE_CLOUD_LOCATION", "").strip()
+                if loc:
+                    client_kwargs["location"] = loc
             elif getattr(settings, "GOOGLE_CLOUD_PROJECT", ""):
                 client_kwargs["vertexai"] = True
                 client_kwargs["project"] = settings.GOOGLE_CLOUD_PROJECT
-                if getattr(settings, "GOOGLE_CLOUD_LOCATION", ""):
-                    client_kwargs["location"] = settings.GOOGLE_CLOUD_LOCATION
+                loc = getattr(settings, "GOOGLE_CLOUD_LOCATION", "").strip()
+                if loc:
+                    client_kwargs["location"] = loc
 
         if getattr(settings, "GOOGLE_APPLICATION_CREDENTIALS", "") and not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = settings.GOOGLE_APPLICATION_CREDENTIALS
 
         client = genai.Client(**client_kwargs) if client_kwargs else genai.Client()
-        gemini_model = getattr(settings, "GEMINI_QA_MODEL", getattr(settings, "GEMINI_MODEL", "gemini-3.5-flash"))
+        gemini_model = getattr(settings, "GEMINI_QA_MODEL", getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash-lite"))
         response = client.models.generate_content(
             model=gemini_model,
             contents=prompt,

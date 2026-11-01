@@ -14,7 +14,7 @@ class TestVirtualQASchemaAndConfig(unittest.TestCase):
         self.assertTrue(hasattr(settings, "GEMINI_API_KEY"))
         self.assertTrue(hasattr(settings, "GOOGLE_APPLICATION_CREDENTIALS"))
         self.assertTrue(hasattr(settings, "GOOGLE_CLOUD_PROJECT"))
-        self.assertTrue(bool(settings.GOOGLE_CLOUD_LOCATION))
+        self.assertTrue(hasattr(settings, "GOOGLE_CLOUD_LOCATION"))
         self.assertTrue(bool(settings.GEMINI_QA_MODEL))
 
         # QA Pipeline settings

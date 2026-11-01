@@ -54,8 +54,8 @@ class Settings(BaseSettings):
     GOOGLE_APPLICATION_CREDENTIALS_JSON: str = ""
     GEMINI_LLM_APPLICATION_CREDENTIALS_JSON: str = ""
     GOOGLE_CLOUD_PROJECT: str = ""
-    GOOGLE_CLOUD_LOCATION: str = "global"
-    GEMINI_QA_MODEL: str = "gemini-3.5-flash"
+    GOOGLE_CLOUD_LOCATION: str = ""
+    GEMINI_QA_MODEL: str = "gemini-2.5-flash-lite"
 
     QA_DEMO_MODE: bool = False
     QA_RECORDINGS_DIR: str = "/var/lib/freeswitch/recordings"
