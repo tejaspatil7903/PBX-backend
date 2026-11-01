@@ -1,9 +1,12 @@
 import os
+import re
+import json
 import logging
 import socket
 from xml.etree.ElementTree import Element, SubElement, tostring
 from typing import Dict, Any, List, Optional
 from src.core.database import execute_query_one, execute_query
+from src.core.redis import get_redis
 from src.services.voicemail_prompt import (
     ensure_voicemail_prompt,
     ensure_conference_pin_prompt,
@@ -172,6 +175,55 @@ async def handle_dialplan_request(form_data: Dict[str, Any]) -> str:
         SubElement(cond_elem, "action", application="answer")
         SubElement(cond_elem, "action", application="playback", data="local_stream://moh")
         return format_xml(doc)
+
+    if dest_number == "park":
+        ext_elem = SubElement(context_elem, "extension", name="park_loopback")
+        cond_elem = SubElement(ext_elem, "condition", field="destination_number", expression="^park$")
+        SubElement(cond_elem, "action", application="park")
+        return format_xml(doc)
+
+    # Supervisor Live Intervention: *88<mode><agent_ext>
+    # Modes: 0=Listen (spy), 1=Whisper aleg, 2=Whisper bleg, 3=Barge (both legs)
+    sup_match = re.match(r"^\*88([0-3])(\d{2,10})$", dest_number)
+    if sup_match:
+        mode = sup_match.group(1)
+        target_agent = sup_match.group(2)
+        redis_obj = get_redis()
+        if hasattr(redis_obj, "__await__"):
+            redis_client = await redis_obj
+        else:
+            redis_client = redis_obj
+
+        active_uuid = None
+        if redis_client:
+            if tenant_id:
+                active_uuid = await redis_client.get(f"tenant:{tenant_id}:qa_agent_call:{target_agent}")
+            if not active_uuid:
+                active_uuid = await redis_client.get(f"qa_agent_call:{target_agent}")
+
+        if active_uuid:
+            if isinstance(active_uuid, bytes):
+                active_uuid = active_uuid.decode("utf-8")
+            ext_elem = SubElement(context_elem, "extension", name=f"supervisor_eavesdrop_{target_agent}")
+            cond_elem = SubElement(ext_elem, "condition", field="destination_number", expression=".*")
+            SubElement(cond_elem, "action", application="set", data=f"tenant_id={tenant_id}")
+            SubElement(cond_elem, "action", application="set", data="direction=internal")
+            SubElement(cond_elem, "action", application="set", data="eavesdrop_enable_dtmf=true")
+            if mode == "1":
+                SubElement(cond_elem, "action", application="set", data="eavesdrop_whisper_aleg=true")
+            elif mode == "2":
+                SubElement(cond_elem, "action", application="set", data="eavesdrop_whisper_bleg=true")
+            # mode 0 is listen only; mode 3 is barge (neither whisper flag set, FreeSWITCH eavesdrop bridges both)
+
+            SubElement(cond_elem, "action", application="answer")
+            SubElement(cond_elem, "action", application="eavesdrop", data=active_uuid)
+            return format_xml(doc)
+        else:
+            ext_elem = SubElement(context_elem, "extension", name="supervisor_eavesdrop_not_found")
+            cond_elem = SubElement(ext_elem, "condition", field="destination_number", expression=".*")
+            SubElement(cond_elem, "action", application="respond", data="404 Agent Not in Active Call")
+            SubElement(cond_elem, "action", application="hangup", data="UNALLOCATED_NUMBER")
+            return format_xml(doc)
 
     # Dedicated Voicemail Destination (triggered via transfer_on_fail or direct transfer)
     if dest_number.startswith("voicemail_"):
@@ -769,7 +821,8 @@ async def handle_dialplan_request(form_data: Dict[str, Any]) -> str:
         target_ext = await execute_query_one(
             """
             SELECT e.id, e.extension_number, e.display_name, e.caller_id_name, e.caller_id_number,
-                   e.email, e.enabled, e.no_answer_timeout, e.tenant_id, t.sip_domain
+                   e.email, e.enabled, e.no_answer_timeout, e.tenant_id, t.sip_domain,
+                   COALESCE(e.is_virtual, false) as is_virtual
             FROM extensions e
             JOIN tenants t ON e.tenant_id = t.id
             WHERE e.tenant_id = CAST(:tenant_id AS uuid) AND e.extension_number = :dest
@@ -782,7 +835,8 @@ async def handle_dialplan_request(form_data: Dict[str, Any]) -> str:
         target_ext = await execute_query_one(
             """
             SELECT e.id, e.extension_number, e.display_name, e.caller_id_name, e.caller_id_number,
-                   e.email, e.enabled, e.no_answer_timeout, e.tenant_id, t.sip_domain
+                   e.email, e.enabled, e.no_answer_timeout, e.tenant_id, t.sip_domain,
+                   COALESCE(e.is_virtual, false) as is_virtual
             FROM extensions e
             JOIN tenants t ON e.tenant_id = t.id
             WHERE e.extension_number = :dest
@@ -798,6 +852,16 @@ async def handle_dialplan_request(form_data: Dict[str, Any]) -> str:
     if target_ext:
         ext_num = target_ext["extension_number"]
         callee_domain = target_ext.get("sip_domain") or domain_name
+
+        if target_ext.get("is_virtual"):
+            logger.info(f"Target extension {ext_num} is a Virtual QA extension. Parking call.")
+            ext_elem = SubElement(context_elem, "extension", name=f"virtual_ext_{ext_num}")
+            cond_elem = SubElement(ext_elem, "condition", field="destination_number", expression=f"^{ext_num}$")
+            SubElement(cond_elem, "action", application="answer")
+            SubElement(cond_elem, "action", application="sleep", data="500")
+            SubElement(cond_elem, "action", application="playback", data="ivr/ivr-this_is_an_automated_system.wav")
+            SubElement(cond_elem, "action", application="hangup")
+            return format_xml(doc)
 
         # Check tenant policy for internal calling
         tenant_row = await execute_query_one(
@@ -863,6 +927,71 @@ async def handle_dialplan_request(form_data: Dict[str, Any]) -> str:
         SubElement(cond_elem, "action", application="set", data="ringback=%(2000,4000,440.0,480.0)")
         SubElement(cond_elem, "action", application="set", data="instant_ringback=true")
         SubElement(cond_elem, "action", application="export", data="sip_contact_user=${destination_number}")
+
+        # Check Virtual QA configuration for real-time monitoring
+        qa_cfg = None
+        if tenant_id:
+            try:
+                qa_cfg = await execute_query_one(
+                    """
+                    SELECT id, qa_extension_id, max_warn_retries, cooldown_seconds,
+                           supervisor_extension, monitored_agents, monitored_callers
+                    FROM virtual_qa_configs
+                    WHERE tenant_id = CAST(:tid AS uuid) AND enabled = true
+                    LIMIT 1
+                    """,
+                    {"tid": tenant_id}
+                )
+            except Exception as e:
+                logger.warning(f"Error querying virtual_qa_configs: {e}")
+
+        is_qa_monitored = False
+        qa_agent_leg = "bleg"
+        qa_agent_ext = ""
+        qa_customer_ext = ""
+
+        if qa_cfg:
+            agents_cfg = qa_cfg.get("monitored_agents") or []
+            if isinstance(agents_cfg, str):
+                try:
+                    agents_cfg = json.loads(agents_cfg)
+                except Exception:
+                    agents_cfg = [agents_cfg]
+            callers_cfg = qa_cfg.get("monitored_callers") or ["*"]
+            if isinstance(callers_cfg, str):
+                try:
+                    callers_cfg = json.loads(callers_cfg)
+                except Exception:
+                    callers_cfg = [callers_cfg]
+
+            if caller_id_number in agents_cfg:
+                is_qa_monitored = True
+                qa_agent_leg = "aleg"
+                qa_agent_ext = caller_id_number
+                qa_customer_ext = ext_num
+            elif ext_num in agents_cfg:
+                is_qa_monitored = True
+                qa_agent_leg = "bleg"
+                qa_agent_ext = ext_num
+                qa_customer_ext = caller_id_number
+
+            if is_qa_monitored and callers_cfg and "*" not in callers_cfg:
+                if qa_customer_ext not in callers_cfg:
+                    is_qa_monitored = False
+
+        if is_qa_monitored:
+            logger.info(f"Call {caller_id_number} -> {ext_num} matches Virtual QA monitoring policy (agent={qa_agent_ext}, leg={qa_agent_leg})")
+            SubElement(cond_elem, "action", application="set", data="RECORD_STEREO=true")
+            SubElement(cond_elem, "action", application="set", data="enable_file_write_buffering=false")
+            SubElement(cond_elem, "action", application="set", data="qa_enabled=true")
+            SubElement(cond_elem, "action", application="set", data=f"qa_config_id={qa_cfg['id']}")
+            SubElement(cond_elem, "action", application="set", data=f"qa_virtual_ext={qa_cfg.get('qa_extension_id') or ''}")
+            SubElement(cond_elem, "action", application="set", data=f"qa_agent_leg={qa_agent_leg}")
+            SubElement(cond_elem, "action", application="set", data=f"qa_agent_ext={qa_agent_ext}")
+            SubElement(cond_elem, "action", application="set", data=f"qa_customer_ext={qa_customer_ext}")
+            SubElement(cond_elem, "action", application="set", data=f"qa_max_retries={qa_cfg.get('max_warn_retries', 3)}")
+            SubElement(cond_elem, "action", application="set", data=f"qa_cooldown={qa_cfg.get('cooldown_seconds', 10)}")
+            SubElement(cond_elem, "action", application="set", data=f"qa_supervisor_ext={qa_cfg.get('supervisor_extension') or ''}")
 
         # Record call ONLY upon answer (so no premature early media during ringing)
         if tenant_id:

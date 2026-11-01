@@ -69,6 +69,7 @@ async def handle_directory_request(form_data: Dict[str, Any]) -> str:
             """
             SELECT e.extension_number, e.display_name, e.email, e.sip_password, e.voicemail_pin,
                    e.caller_id_name, e.caller_id_number, e.outbound_caller_id, e.enabled,
+                   COALESCE(e.is_virtual, false) as is_virtual,
                    vb.password as vb_password, vb.email_notification, vb.email_attach_file,
                    vb.email_address as vb_email, vb.delete_after_email
             FROM extensions e
@@ -83,6 +84,7 @@ async def handle_directory_request(form_data: Dict[str, Any]) -> str:
             """
             SELECT e.extension_number, e.display_name, e.email, e.sip_password, e.voicemail_pin,
                    e.caller_id_name, e.caller_id_number, e.outbound_caller_id, e.enabled,
+                   COALESCE(e.is_virtual, false) as is_virtual,
                    vb.password as vb_password, vb.email_notification, vb.email_attach_file,
                    vb.email_address as vb_email, vb.delete_after_email
             FROM extensions e
@@ -112,7 +114,11 @@ async def handle_directory_request(form_data: Dict[str, Any]) -> str:
 
         # Domain level params
         d_params = SubElement(domain_elem, "params")
-        SubElement(d_params, "param", name="dial-string", value=sofia_dial_string)
+        has_only_virtual = all(ext.get("is_virtual") for ext in extensions)
+        if has_only_virtual:
+            SubElement(d_params, "param", name="dial-string", value="loopback/park")
+        else:
+            SubElement(d_params, "param", name="dial-string", value=sofia_dial_string)
 
         groups = SubElement(domain_elem, "groups")
         group = SubElement(groups, "group", name="default")
@@ -121,28 +127,32 @@ async def handle_directory_request(form_data: Dict[str, Any]) -> str:
         for ext in extensions:
             ext_num = ext["extension_number"]
             sip_pwd = ext["sip_password"]
-            vm_pin = ext.get("voicemail_pin") or "1234"
             cid_name = ext.get("caller_id_name") or ext.get("display_name") or ext_num
             cid_num = ext.get("caller_id_number") or ext_num
             outbound_cli = ext.get("outbound_caller_id") or cid_num
             email_str = ext.get("email") or ""
+            is_virtual = bool(ext.get("is_virtual"))
 
             u_elem = SubElement(users, "user", id=ext_num)
 
-            # User Parameters (Password & Auth & Voicemail)
-            vm_pin = ext.get("vb_password") or ext.get("voicemail_pin") or "1234"
-            vm_email = ext.get("vb_email") or ext.get("email") or ""
-            keep_local = "false" if ext.get("delete_after_email") else "true"
-
             u_params = SubElement(u_elem, "params")
-            SubElement(u_params, "param", name="password", value=sip_pwd)
-            SubElement(u_params, "param", name="vm-password", value=vm_pin)
-            SubElement(u_params, "param", name="vm-enabled", value="true")
-            SubElement(u_params, "param", name="vm-email-all-messages", value="true")
-            SubElement(u_params, "param", name="vm-attach-file", value="true")
-            SubElement(u_params, "param", name="vm-keep-local-after-email", value=keep_local)
-            if vm_email:
-                SubElement(u_params, "param", name="vm-mailto", value=vm_email)
+            if is_virtual:
+                # Virtual QA extension: reject SIP registration and loopback to park
+                SubElement(u_params, "param", name="dial-string", value="loopback/park")
+            else:
+                # User Parameters (Password & Auth & Voicemail)
+                vm_pin = ext.get("vb_password") or ext.get("voicemail_pin") or "1234"
+                vm_email = ext.get("vb_email") or ext.get("email") or ""
+                keep_local = "false" if ext.get("delete_after_email") else "true"
+
+                SubElement(u_params, "param", name="password", value=sip_pwd)
+                SubElement(u_params, "param", name="vm-password", value=vm_pin)
+                SubElement(u_params, "param", name="vm-enabled", value="true")
+                SubElement(u_params, "param", name="vm-email-all-messages", value="true")
+                SubElement(u_params, "param", name="vm-attach-file", value="true")
+                SubElement(u_params, "param", name="vm-keep-local-after-email", value=keep_local)
+                if vm_email:
+                    SubElement(u_params, "param", name="vm-mailto", value=vm_email)
 
             # User Dialplan Variables
             u_vars = SubElement(u_elem, "variables")
