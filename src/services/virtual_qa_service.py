@@ -764,7 +764,7 @@ class VirtualQAService:
                 qa_cfg = None
                 if config_id:
                     qa_cfg = await execute_query_one(
-                        "SELECT policy_prompt, banned_keywords FROM virtual_qa_configs WHERE id = CAST(:id AS uuid)",
+                        "SELECT COALESCE(policy_prompt, qa_policy_prompt) as policy_prompt, banned_keywords FROM virtual_qa_configs WHERE id = CAST(:id AS uuid)",
                         {"id": config_id}
                     )
                 banned_keywords = []

@@ -154,29 +154,33 @@ async def create_qa_config(
         except Exception:
             pass
 
+    sup_ext = payload.supervisor_extension.strip() if payload.supervisor_extension and payload.supervisor_extension.strip() else "9001"
+    policy_text = payload.policy_prompt.strip() if payload.policy_prompt and payload.policy_prompt.strip() else "Agent must be courteous, empathetic, and professional at all times."
+
     # 5. Insert configuration row
     new_cfg = await execute_query_one(
         """
         INSERT INTO virtual_qa_configs (
-            tenant_id, qa_extension_id, max_warn_retries, cooldown_seconds,
+            tenant_id, qa_extension_id, name, max_warn_retries, cooldown_seconds,
             supervisor_extension, monitored_agents, monitored_callers,
-            policy_prompt, banned_keywords, enabled
+            policy_prompt, qa_policy_prompt, banned_keywords, enabled
         ) VALUES (
-            CAST(:tid AS uuid), CAST(:ext_id AS uuid), :retries, :cooldown,
+            CAST(:tid AS uuid), CAST(:ext_id AS uuid), :name, :retries, :cooldown,
             :sup_ext, CAST(:agents AS jsonb), CAST(:callers AS jsonb),
-            :policy, CAST(:keywords AS jsonb), :enabled
+            :policy, :policy, CAST(:keywords AS jsonb), :enabled
         )
         RETURNING *
         """,
         {
             "tid": tid,
             "ext_id": ext_id,
+            "name": f"Virtual QA Bot ({payload.qa_extension_number})",
             "retries": payload.max_warn_retries,
             "cooldown": payload.cooldown_seconds,
-            "sup_ext": payload.supervisor_extension,
+            "sup_ext": sup_ext,
             "agents": json.dumps(payload.monitored_agents),
             "callers": json.dumps(payload.monitored_callers),
-            "policy": payload.policy_prompt,
+            "policy": policy_text,
             "keywords": json.dumps(cleaned_keywords),
             "enabled": payload.enabled
         }
@@ -221,6 +225,7 @@ async def update_qa_config(
         params["callers"] = json.dumps(payload.monitored_callers)
     if payload.policy_prompt is not None:
         updates.append("policy_prompt = :policy")
+        updates.append("qa_policy_prompt = :policy")
         params["policy"] = payload.policy_prompt
     if payload.banned_keywords is not None:
         cleaned = [k.strip().lower() for k in payload.banned_keywords if k.strip()]
