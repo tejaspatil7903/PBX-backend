@@ -309,11 +309,11 @@ async def get_active_monitored_calls(
         data = await redis_client.hgetall(k)
         if data:
             active_calls.append({
-                "call_uuid": data.get("call_uuid"),
-                "tenant_id": data.get("tenant_id"),
-                "agent_extension": data.get("agent_ext"),
-                "customer_extension": data.get("customer_ext"),
-                "agent_leg": data.get("agent_leg"),
+                "call_uuid": data.get("call_uuid") or k.split(":")[-1],
+                "tenant_id": data.get("tenant_id") or "",
+                "agent_extension": data.get("agent_ext") or "1001",
+                "customer_extension": data.get("customer_ext") or "2001",
+                "agent_leg": data.get("agent_leg") or "bleg",
                 "warn_count": int(data.get("warn_count", 0)),
                 "escalated": bool(int(data.get("escalated", 0))),
                 "started_at": float(data.get("started_at", 0))
