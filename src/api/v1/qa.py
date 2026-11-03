@@ -356,15 +356,32 @@ async def supervisor_intervene(
     )
     sip_domain = tenant_row.get("sip_domain") if tenant_row else "pbx.terrixai.com"
 
-    # Default supervisor extension
-    sup_ext = "9001"
-    # Or query user extension
+    # Look up supervisor extension
+    sup_ext = None
     user_ext = await execute_query_one(
-        "SELECT extension_number FROM extensions WHERE tenant_id = CAST(:tid AS uuid) AND email = :email LIMIT 1",
+        "SELECT extension_number FROM extensions WHERE tenant_id = CAST(:tid AS uuid) AND email = :email AND enabled = true AND deleted_at IS NULL LIMIT 1",
         {"tid": tid, "email": current_user.email}
     )
     if user_ext and user_ext.get("extension_number"):
         sup_ext = user_ext["extension_number"]
+
+    if not sup_ext:
+        sup_ext_row = await execute_query_one(
+            """
+            SELECT extension_number FROM extensions 
+            WHERE tenant_id = CAST(:tid AS uuid) 
+              AND enabled = true AND deleted_at IS NULL
+              AND (display_name ILIKE '%supervisor%' OR display_name ILIKE '%qa%' OR extension_number IN ('1004', '9001'))
+            ORDER BY (display_name ILIKE '%supervisor%') DESC
+            LIMIT 1
+            """,
+            {"tid": tid}
+        )
+        if sup_ext_row and sup_ext_row.get("extension_number"):
+            sup_ext = sup_ext_row["extension_number"]
+
+    if not sup_ext:
+        sup_ext = "1004"
 
     # Build originate eavesdrop command
     flags = ["eavesdrop_enable_dtmf=true", "originate_timeout=25", "ignore_early_media=true"]
@@ -375,7 +392,9 @@ async def supervisor_intervene(
             flags.append("eavesdrop_whisper_bleg=true")
     elif mode == "listen":
         flags.append("eavesdrop_hide=true")
-    # barge: no whisper flags, bidirectional bridge
+    elif mode == "barge":
+        flags.append("eavesdrop_whisper_aleg=true")
+        flags.append("eavesdrop_whisper_bleg=true")
 
     flags_str = ",".join(flags)
     cmd = f"bgapi originate {{{flags_str}}}user/{sup_ext}@{sip_domain} &eavesdrop({call_uuid})"

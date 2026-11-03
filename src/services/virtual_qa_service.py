@@ -794,6 +794,7 @@ class VirtualQAService:
             })
             if agent_ext:
                 await redis_client.set(f"tenant:{tenant_id}:qa_agent_call:{agent_ext}", call_uuid, ex=14400)
+                await redis_client.set(f"qa_agent_call:{agent_ext}", call_uuid, ex=14400)
 
         # Spawn Audio Tailing Task
         if call_uuid and call_uuid not in self.tailing_tasks:
@@ -816,6 +817,7 @@ class VirtualQAService:
             await redis_client.delete(f"tenant:{tenant_id}:qa_call:{call_uuid}")
             if agent_ext:
                 await redis_client.delete(f"tenant:{tenant_id}:qa_agent_call:{agent_ext}")
+                await redis_client.delete(f"qa_agent_call:{agent_ext}")
             await redis_client.delete(f"tenant:{tenant_id}:qa_cd:{call_uuid}")
         logger.info(f"Cleaned up QA state for terminated call {call_uuid}")
 

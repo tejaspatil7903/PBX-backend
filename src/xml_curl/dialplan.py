@@ -213,7 +213,11 @@ async def handle_dialplan_request(form_data: Dict[str, Any]) -> str:
                 SubElement(cond_elem, "action", application="set", data="eavesdrop_whisper_aleg=true")
             elif mode == "2":
                 SubElement(cond_elem, "action", application="set", data="eavesdrop_whisper_bleg=true")
-            # mode 0 is listen only; mode 3 is barge (neither whisper flag set, FreeSWITCH eavesdrop bridges both)
+            elif mode == "3":
+                # mode 3 is barge: whisper on both legs connects supervisor to agent AND customer
+                SubElement(cond_elem, "action", application="set", data="eavesdrop_whisper_aleg=true")
+                SubElement(cond_elem, "action", application="set", data="eavesdrop_whisper_bleg=true")
+            # mode 0 is listen only: neither whisper flag set, silent spy mode
 
             SubElement(cond_elem, "action", application="answer")
             SubElement(cond_elem, "action", application="eavesdrop", data=active_uuid)
