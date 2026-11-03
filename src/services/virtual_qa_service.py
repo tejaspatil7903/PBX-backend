@@ -887,39 +887,73 @@ class VirtualQAService:
                     else:
                         banned_keywords = list(bk)
 
-                # Loop reading chunks
-                bytes_per_second = header["sample_rate"] * 2 * 2 # 8000Hz * 2 channels * 2 bytes = 32000
-                chunk_size = bytes_per_second * 4 # 4 seconds of audio
+                # 16-bit signed stereo PCM (2 channels, 2 bytes/sample)
+                frame_bytes = header["num_channels"] * (header["bits_per_sample"] // 8) # e.g. 2 * 2 = 4 bytes
+                bytes_per_second = header["sample_rate"] * frame_bytes # e.g. 8000 * 4 = 32000
+
+                # Sliding analysis window:
+                # Analyze 3.0 seconds of audio with a 2.0 second advance (1.0s overlap to protect boundary words)
+                window_bytes = int(bytes_per_second * 3.0)
+                step_bytes = int(bytes_per_second * 2.0)
+                window_bytes -= (window_bytes % frame_bytes)
+                step_bytes -= (step_bytes % frame_bytes)
+
+                audio_buffer = bytearray()
+
+                async def _analyze_chunk(pcm_bytes: bytes):
+                    if len(pcm_bytes) < bytes_per_second:
+                        return
+                    agent_leg = call_info.get("qa_agent_leg", "bleg")
+                    agent_samples = deinterleave_stereo_chunk(pcm_bytes, leg=agent_leg)
+                    rms = calculate_rms(agent_samples)
+
+                    # Only process non-silent chunks
+                    if rms >= settings.QA_AUDIO_SILENCE_RMS:
+                        agent_pcm = agent_samples.tobytes()
+                        logger.info(
+                            f"🎙️ Audio tail chunk ({len(pcm_bytes)}B, ~{len(pcm_bytes)/bytes_per_second:.1f}s, leg={agent_leg}): "
+                            f"rms={rms:.1f} >= {settings.QA_AUDIO_SILENCE_RMS}. Transcribing with ElevenLabs..."
+                        )
+                        transcript = await transcribe_elevenlabs_stt(agent_pcm, sample_rate=header["sample_rate"])
+                        if transcript:
+                            logger.info(f"📝 STT Transcript for Agent {call_info.get('qa_agent_ext')}: \"{transcript}\"")
+                            # Check 1: Local Regex Keyword Match
+                            kw_res = local_policy_check(transcript, banned_keywords)
+                            if kw_res:
+                                logger.warning(f"🚨 BANNED KEYWORD MATCHED: '{kw_res.get('keyword')}' -> Triggering coaching whisper!")
+                                await trigger_qa_violation(call_info, kw_res, transcript=transcript, esl_client=self)
+                            else:
+                                # Check 2: Gemini Policy Check
+                                ai_res = await evaluate_with_gemini(transcript, policy_prompt, tenant_id=tenant_id)
+                                if ai_res.get("violation"):
+                                    logger.warning(f"🚨 GEMINI POLICY VIOLATION: {ai_res.get('reason')} -> Triggering coaching whisper!")
+                                    await trigger_qa_violation(call_info, ai_res, transcript=transcript, esl_client=self)
 
                 while self.running:
-                    raw_chunk = f.read(chunk_size)
-                    if len(raw_chunk) >= bytes_per_second * 2: # At least 2 seconds
-                        agent_samples = deinterleave_stereo_chunk(raw_chunk, leg=call_info.get("qa_agent_leg", "bleg"))
-                        rms = calculate_rms(agent_samples)
+                    # Read all available new audio written by FreeSWITCH
+                    new_data = f.read(65536)
+                    if new_data:
+                        audio_buffer.extend(new_data)
 
-                        # Only process non-silent chunks
-                        if rms >= settings.QA_AUDIO_SILENCE_RMS:
-                            agent_pcm = agent_samples.tobytes()
-                            logger.info(f"🎙️ Audio tail chunk: rms={rms:.1f} >= {settings.QA_AUDIO_SILENCE_RMS}. Transcribing with ElevenLabs...")
-                            transcript = await transcribe_elevenlabs_stt(agent_pcm, sample_rate=header["sample_rate"])
-                            if transcript:
-                                logger.info(f"📝 STT Transcript for Agent {call_info.get('qa_agent_ext')}: \"{transcript}\"")
-                                # Check 1: Local Regex Keyword Match
-                                kw_res = local_policy_check(transcript, banned_keywords)
-                                if kw_res:
-                                    logger.warning(f"🚨 BANNED KEYWORD MATCHED: '{kw_res.get('keyword')}' -> Triggering coaching whisper!")
-                                    await trigger_qa_violation(call_info, kw_res, transcript=transcript, esl_client=self)
-                                else:
-                                    # Check 2: Gemini Policy Check
-                                    ai_res = await evaluate_with_gemini(transcript, policy_prompt, tenant_id=tenant_id)
-                                    if ai_res.get("violation"):
-                                        logger.warning(f"🚨 GEMINI POLICY VIOLATION: {ai_res.get('reason')} -> Triggering coaching whisper!")
-                                        await trigger_qa_violation(call_info, ai_res, transcript=transcript, esl_client=self)
+                    # Drain full windows
+                    while len(audio_buffer) >= window_bytes:
+                        window_data = bytes(audio_buffer[:window_bytes])
+                        del audio_buffer[:step_bytes]
+                        await _analyze_chunk(window_data)
 
                     await asyncio.sleep(settings.QA_AUDIO_TAIL_INTERVAL_MS / 1000.0)
 
         except asyncio.CancelledError:
-            pass
+            try:
+                if 'f' in locals() and not f.closed:
+                    final_data = f.read()
+                    if final_data:
+                        audio_buffer.extend(final_data)
+                if len(audio_buffer) >= bytes_per_second:
+                    align_len = len(audio_buffer) - (len(audio_buffer) % frame_bytes)
+                    await asyncio.shield(_analyze_chunk(bytes(audio_buffer[:align_len])))
+            except Exception as final_err:
+                logger.debug(f"Final audio flush error on cancel: {final_err}")
         except Exception as err:
             logger.error(f"Error in audio tailing loop for call {call_uuid}: {err}")
 

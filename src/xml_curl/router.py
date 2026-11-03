@@ -1,6 +1,7 @@
 import logging
 import json
 import os
+import re
 import asyncio
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -490,7 +491,11 @@ async def handle_cdr(request: Request):
         if raw_str.startswith("<?xml") or raw_str.startswith("<cdr"):
             cdr_data = parse_xml_cdr_to_dict(raw_str)
         else:
-            cdr_data = json.loads(raw_str)
+            try:
+                cdr_data = json.loads(raw_str, strict=False)
+            except Exception:
+                sanitized = re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", raw_str)
+                cdr_data = json.loads(sanitized, strict=False)
 
         await process_cdr_record(cdr_data)
         return Response(content="OK", media_type="text/plain")
