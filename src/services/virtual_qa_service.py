@@ -524,19 +524,22 @@ async def trigger_qa_violation(
             logger.error(f"Failed to record qa_event 'warning' in database: {db_err}")
 
         # Broadcast via WebSocket
+        normalized_tid = str(tenant_id) if tenant_id else None
         ws_payload = {
             "event_type": "qa.warning",
             "call_uuid": call_uuid,
-            "tenant_id": tenant_id,
+            "tenant_id": normalized_tid,
             "agent_extension": qa_agent_ext,
             "customer_extension": qa_customer_ext,
             "warn_count": warn_count,
             "max_warn_retries": max_warn_retries,
+            "reason": violation_data.get("reason", "Policy violation"),
             "coaching": coaching,
+            "whisper_text": whisper_text,
             "transcript": transcript,
             "timestamp": time.time()
         }
-        await broadcast_qa_event(tenant_id, ws_payload)
+        await broadcast_qa_event(normalized_tid, ws_payload)
 
         return {
             "status": "warned",
@@ -604,10 +607,11 @@ async def trigger_qa_violation(
                 logger.error(f"Failed to record qa_event 'escalation' in database: {db_err}")
 
             # Broadcast WebSocket escalation event
+            normalized_tid = str(tenant_id) if tenant_id else None
             ws_payload = {
                 "event_type": "qa.escalation",
                 "call_uuid": call_uuid,
-                "tenant_id": tenant_id,
+                "tenant_id": normalized_tid,
                 "agent_extension": qa_agent_ext,
                 "customer_extension": qa_customer_ext,
                 "supervisor_extension": supervisor_ext,
@@ -618,7 +622,7 @@ async def trigger_qa_violation(
                 "transcript": transcript,
                 "timestamp": time.time()
             }
-            await broadcast_qa_event(tenant_id, ws_payload)
+            await broadcast_qa_event(normalized_tid, ws_payload)
 
         return {
             "status": "escalated",
