@@ -483,10 +483,17 @@ async def handle_cdr(request: Request):
         if not body:
             return Response(content="OK", media_type="text/plain")
 
-        if body.startswith(b"cdr="):
-            raw_str = urllib.parse.unquote_plus(body[4:].decode("utf-8", errors="ignore")).strip()
+        decoded = body.decode("utf-8", errors="ignore").strip()
+        if decoded.startswith("cdr="):
+            raw_str = urllib.parse.unquote_plus(decoded[4:]).strip()
+        elif "&cdr=" in decoded or "cdr=" in decoded:
+            parsed = urllib.parse.parse_qs(decoded)
+            if "cdr" in parsed and parsed["cdr"]:
+                raw_str = parsed["cdr"][0].strip()
+            else:
+                raw_str = decoded
         else:
-            raw_str = body.decode("utf-8", errors="ignore").strip()
+            raw_str = decoded
 
         if raw_str.startswith("<?xml") or raw_str.startswith("<cdr"):
             cdr_data = parse_xml_cdr_to_dict(raw_str)
@@ -494,13 +501,17 @@ async def handle_cdr(request: Request):
             try:
                 cdr_data = json.loads(raw_str, strict=False)
             except Exception:
-                sanitized = re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", raw_str)
-                cdr_data = json.loads(sanitized, strict=False)
+                try:
+                    unquoted = urllib.parse.unquote_plus(raw_str)
+                    cdr_data = json.loads(unquoted, strict=False)
+                except Exception:
+                    sanitized = re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", raw_str)
+                    cdr_data = json.loads(sanitized, strict=False)
 
         await process_cdr_record(cdr_data)
         return Response(content="OK", media_type="text/plain")
     except Exception as exc:
-        logger.error(f"Error processing CDR callback: {exc}", exc_info=True)
+        logger.warning(f"Could not parse CDR callback payload: {exc}")
         return Response(content="OK", media_type="text/plain")
 
 

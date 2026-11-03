@@ -71,6 +71,7 @@ def parse_wav_header(file_obj) -> Dict[str, Any]:
     return {
         "sample_rate": sample_rate,
         "channels": channels,
+        "num_channels": channels,
         "bits_per_sample": bits,
         "data_offset": data_offset,
         "data_size": data_size,
@@ -888,8 +889,11 @@ class VirtualQAService:
                         banned_keywords = list(bk)
 
                 # 16-bit signed stereo PCM (2 channels, 2 bytes/sample)
-                frame_bytes = header["num_channels"] * (header["bits_per_sample"] // 8) # e.g. 2 * 2 = 4 bytes
-                bytes_per_second = header["sample_rate"] * frame_bytes # e.g. 8000 * 4 = 32000
+                channels = header.get("channels") or header.get("num_channels", 2)
+                bits_per_sample = header.get("bits_per_sample", 16)
+                sample_rate = header.get("sample_rate", 8000)
+                frame_bytes = channels * (bits_per_sample // 8) # e.g. 2 * 2 = 4 bytes
+                bytes_per_second = sample_rate * frame_bytes # e.g. 8000 * 4 = 32000
 
                 # Sliding analysis window:
                 # Analyze 3.0 seconds of audio with a 2.0 second advance (1.0s overlap to protect boundary words)
