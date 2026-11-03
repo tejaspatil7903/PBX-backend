@@ -37,8 +37,8 @@
     <param name="suppress-cng" value="true"/>
     <param name="challenge-realm" value="auto_from"/>
 
-    <!-- NAT Traversal & Symmetric RTP for Docker on macOS -->
-    <param name="disable-rtp-auto-adjust" value="true"/>
+    <!-- NAT Traversal & Symmetric RTP for Linux Cloud VM -->
+    <param name="disable-rtp-auto-adjust" value="false"/>
     <param name="aggressive-nat-detection" value="true"/>
     <param name="NDLB-force-rport" value="true"/>
     <param name="NDLB-broken-auth-hash" value="true"/>

@@ -162,7 +162,6 @@ async def handle_dialplan_request(form_data: Dict[str, Any]) -> str:
         cond_elem = SubElement(ext_elem, "condition", field="destination_number", expression=r"^(\*96|9196)$")
         SubElement(cond_elem, "action", application="set", data=f"tenant_id={tenant_id}")
         SubElement(cond_elem, "action", application="set", data="direction=internal")
-        SubElement(cond_elem, "action", application="set", data="disable_rtp_auto_adjust=true")
         SubElement(cond_elem, "action", application="answer")
         SubElement(cond_elem, "action", application="playback", data="tone_stream://%(250,100,880);loops=2")
         SubElement(cond_elem, "action", application="echo")
@@ -173,7 +172,6 @@ async def handle_dialplan_request(form_data: Dict[str, Any]) -> str:
         cond_elem = SubElement(ext_elem, "condition", field="destination_number", expression=r"^(\*95|9195)$")
         SubElement(cond_elem, "action", application="set", data=f"tenant_id={tenant_id}")
         SubElement(cond_elem, "action", application="set", data="direction=internal")
-        SubElement(cond_elem, "action", application="set", data="disable_rtp_auto_adjust=true")
         SubElement(cond_elem, "action", application="answer")
         SubElement(cond_elem, "action", application="playback", data="tone_stream://%(1000,500,440,480);loops=20")
         return format_xml(doc)
@@ -920,8 +918,6 @@ async def handle_dialplan_request(form_data: Dict[str, Any]) -> str:
         SubElement(cond_elem, "action", application="set", data="direction=internal")
         SubElement(cond_elem, "action", application="set", data="hangup_after_bridge=true")
         SubElement(cond_elem, "action", application="export", data="hangup_after_bridge=true")
-        SubElement(cond_elem, "action", application="set", data="disable_rtp_auto_adjust=true")
-        SubElement(cond_elem, "action", application="export", data="disable_rtp_auto_adjust=true")
 
         # Send 180 Ringing so softphones play local ringtone and do not timeout waiting for early media
         SubElement(cond_elem, "action", application="ring_ready")
@@ -1027,7 +1023,7 @@ async def handle_dialplan_request(form_data: Dict[str, Any]) -> str:
             SubElement(cond_elem, "action", application="transfer", data=f"{cf_dest} XML {context}")
         else:
             callee_domain = target_ext.get("sip_domain") or domain_name
-            bridge_data = f"{{disable_rtp_auto_adjust=true,originate_timeout={timeout},call_timeout={timeout},leg_timeout={timeout},continue_on_fail=true}}user/{ext_num}@{callee_domain}"
+            bridge_data = f"{{originate_timeout={timeout},call_timeout={timeout},leg_timeout={timeout},continue_on_fail=true}}user/{ext_num}@{callee_domain}"
             logger.info(f"Bridging internal call to endpoint 'user/{ext_num}@{callee_domain}' with timeout={timeout}s...")
             SubElement(cond_elem, "action", application="bridge", data=bridge_data)
             SubElement(cond_elem, "action", application="transfer", data=f"{fail_target} XML {context}")
