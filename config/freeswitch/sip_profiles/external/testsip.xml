@@ -1,0 +1,17 @@
+<include>
+  <gateway name="testsip">
+    <param name="proxy" value="test.sip.com"/>
+    <param name="realm" value="test.sip.com"/>
+    <param name="username" value="testsip"/>
+    <param name="password" value="nopassword"/>
+    <param name="register" value="false"/>
+    <param name="from-user" value="testsip"/>
+    <param name="from-domain" value="test.sip.com"/>
+    <param name="caller-id-in-from" value="true"/>
+    <param name="codec-prefs" value="PCMU,PCMA,G722"/>
+    <param name="retry-seconds" value="30"/>
+    <param name="ping" value="25"/>
+    <param name="ping-max" value="3"/>
+    <param name="ping-min" value="1"/>
+  </gateway>
+</include>

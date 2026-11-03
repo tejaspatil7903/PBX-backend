@@ -3,7 +3,10 @@
     <alias name="pbx.terrixai.com"/>
     <alias name="pbx.aikyamlabs.local"/>
     <alias name="127.0.0.1"/>
+    <alias name="10.41.235.1"/>
+    <alias name="172.16.0.212"/>
     <alias name="8.234.117.15"/>
+    <alias name="35.244.8.204"/>
     <alias name="10.0.0.128"/>
   </aliases>
   <settings>
@@ -14,8 +17,10 @@
     <param name="rfc2833-pt" value="101"/>
     <param name="sip-ip" value="$${local_ip_v4}"/>
     <param name="rtp-ip" value="$${local_ip_v4}"/>
-    <param name="ext-rtp-ip" value="$${external_rtp_ip}"/>
-    <param name="ext-sip-ip" value="$${external_sip_ip}"/>
+    <!-- NAT Traversal for VM Public IP -->
+    <param name="ext-rtp-ip" value="35.244.8.204"/>
+    <param name="ext-sip-ip" value="35.244.8.204"/>
+    <param name="rtp-timer-name" value="soft"/>
     <param name="user-agent-string" value="MultiTenantPBX-FreeSWITCH"/>
 
     <!-- Codec Preferences -->
@@ -24,23 +29,21 @@
     <param name="inbound-late-negotiation" value="true"/>
     <param name="inbound-codec-negotiation" value="generous"/>
 
-    <!-- Carrier Whitelist & Extension Authentication -->
-    <param name="apply-inbound-acl" value="carrier_gateways"/>
+    <!-- Extension Authentication -->
     <param name="auth-calls" value="true"/>
     <param name="auth-registrations" value="true"/>
     <param name="accept-blind-reg" value="false"/>
     <param name="accept-blind-auth" value="false"/>
     <param name="suppress-cng" value="true"/>
-    <param name="challenge-realm" value="auto_to"/>
+    <param name="challenge-realm" value="auto_from"/>
 
-    <!-- Advanced NAT and Contact Traversal for Softphones & Mobile Clients -->
-    <param name="apply-nat-acl" value="nat.auto"/>
-    <param name="local-network-acl" value="localnet.auto"/>
+    <!-- NAT Traversal & Symmetric RTP for Docker on macOS -->
+    <param name="disable-rtp-auto-adjust" value="true"/>
+    <param name="aggressive-nat-detection" value="true"/>
     <param name="NDLB-force-rport" value="true"/>
     <param name="NDLB-broken-auth-hash" value="true"/>
     <param name="NDLB-received-in-nat-reg-contact" value="true"/>
-    <param name="NDLB-sendrecv-in-nat" value="true"/>
-    <param name="aggressive-nat-detection" value="true"/>
+    <param name="NDLB-sendrecv-in-session" value="true"/>
     <param name="nat-options-ping" value="true"/>
 
     <!-- WebRTC WSS Configuration -->
@@ -54,7 +57,7 @@
     <param name="enable-timer" value="true"/>
     <param name="session-timeout" value="120"/>
     <param name="minimum-session-expires" value="90"/>
-    <param name="rtp-timeout-sec" value="30"/>
+    <param name="rtp-timeout-sec" value="300"/>
     <param name="rtp-hold-timeout-sec" value="1800"/>
   </settings>
 </profile>

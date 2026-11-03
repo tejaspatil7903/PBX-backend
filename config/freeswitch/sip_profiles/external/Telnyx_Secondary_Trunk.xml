@@ -1,12 +1,12 @@
 <include>
-  <gateway name="ISHAN_ITS">
-    <param name="proxy" value="103.132.242.42"/>
-    <param name="realm" value="103.132.242.42"/>
-    <param name="username" value="ISHAN_ITS"/>
+  <gateway name="Telnyx Secondary Trunk">
+    <param name="proxy" value="sip.telnyx.com"/>
+    <param name="realm" value="sip.telnyx.com"/>
+    <param name="username" value="Telnyx Secondary Trunk"/>
     <param name="password" value="nopassword"/>
     <param name="register" value="false"/>
-    <param name="from-user" value="ISHAN_ITS"/>
-    <param name="from-domain" value="103.132.242.42"/>
+    <param name="from-user" value="Telnyx Secondary Trunk"/>
+    <param name="from-domain" value="sip.telnyx.com"/>
     <param name="caller-id-in-from" value="true"/>
     <param name="codec-prefs" value="PCMU,PCMA,G722"/>
     <param name="retry-seconds" value="30"/>

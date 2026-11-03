@@ -1,12 +1,12 @@
 <include>
-  <gateway name="ISHAN_FL">
-    <param name="proxy" value="103.74.75.154"/>
-    <param name="realm" value="103.74.75.154"/>
-    <param name="username" value="ISHAN_FL"/>
+  <gateway name="Twilio Primary Trunk">
+    <param name="proxy" value="sip.twilio.com"/>
+    <param name="realm" value="sip.twilio.com"/>
+    <param name="username" value="Twilio Primary Trunk"/>
     <param name="password" value="nopassword"/>
     <param name="register" value="false"/>
-    <param name="from-user" value="ISHAN_FL"/>
-    <param name="from-domain" value="103.74.75.154"/>
+    <param name="from-user" value="Twilio Primary Trunk"/>
+    <param name="from-domain" value="sip.twilio.com"/>
     <param name="caller-id-in-from" value="true"/>
     <param name="codec-prefs" value="PCMU,PCMA,G722"/>
     <param name="retry-seconds" value="30"/>

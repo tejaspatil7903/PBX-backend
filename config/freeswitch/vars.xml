@@ -1,6 +1,6 @@
 <include>
-  <X-PRE-PROCESS cmd="set" data="domain=$${local_ip_v4}"/>
-  <X-PRE-PROCESS cmd="set" data="domain_name=$${domain}"/>
+  <X-PRE-PROCESS cmd="set" data="domain=35.244.8.204"/>
+  <X-PRE-PROCESS cmd="set" data="domain_name=35.244.8.204"/>
   <X-PRE-PROCESS cmd="set" data="hold_music=local_stream://moh"/>
   <X-PRE-PROCESS cmd="set" data="use_profile=default"/>
   <X-PRE-PROCESS cmd="set" data="global_codec_prefs=OPUS,G722,PCMU,PCMA"/>
@@ -13,9 +13,9 @@
   <X-PRE-PROCESS cmd="set" data="default_password=1234"/>
   <X-PRE-PROCESS cmd="set" data="us-ring=%(2000,4000,440.0,480.0)"/>
   <X-PRE-PROCESS cmd="set" data="ringback=$${us-ring}"/>
-  <!-- GCP VM NAT to Public IP for ITS SBC & remote clients -->
-  <X-PRE-PROCESS cmd="set" data="external_sip_ip=8.234.117.15"/>
-  <X-PRE-PROCESS cmd="set" data="external_rtp_ip=8.234.117.15"/>
+  <!-- VM Public IP for FreeSWITCH signaling & media -->
+  <X-PRE-PROCESS cmd="set" data="external_sip_ip=35.244.8.204"/>
+  <X-PRE-PROCESS cmd="set" data="external_rtp_ip=35.244.8.204"/>
   <X-PRE-PROCESS cmd="set" data="gcp_vm_private_ip=10.0.0.128"/>
   <!-- Cross Connect IP for Fixed Line series SBC (Private direct connect, NO NAT) -->
   <X-PRE-PROCESS cmd="set" data="crossconnect_sip_ip=10.50.185.245"/>

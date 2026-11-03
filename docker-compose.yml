@@ -36,6 +36,7 @@ services:
       dockerfile: Dockerfile.api
     container_name: pbx_api
     restart: always
+    command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     env_file:
       - .env
     environment:

@@ -162,18 +162,20 @@ async def handle_dialplan_request(form_data: Dict[str, Any]) -> str:
         cond_elem = SubElement(ext_elem, "condition", field="destination_number", expression=r"^(\*96|9196)$")
         SubElement(cond_elem, "action", application="set", data=f"tenant_id={tenant_id}")
         SubElement(cond_elem, "action", application="set", data="direction=internal")
+        SubElement(cond_elem, "action", application="set", data="disable_rtp_auto_adjust=true")
         SubElement(cond_elem, "action", application="answer")
-        SubElement(cond_elem, "action", application="sleep", data="500")
+        SubElement(cond_elem, "action", application="playback", data="tone_stream://%(250,100,880);loops=2")
         SubElement(cond_elem, "action", application="echo")
         return format_xml(doc)
 
     if dest_number in ("*95", "9195"):
-        ext_elem = SubElement(context_elem, "extension", name="moh_test")
+        ext_elem = SubElement(context_elem, "extension", name="tone_test")
         cond_elem = SubElement(ext_elem, "condition", field="destination_number", expression=r"^(\*95|9195)$")
         SubElement(cond_elem, "action", application="set", data=f"tenant_id={tenant_id}")
         SubElement(cond_elem, "action", application="set", data="direction=internal")
+        SubElement(cond_elem, "action", application="set", data="disable_rtp_auto_adjust=true")
         SubElement(cond_elem, "action", application="answer")
-        SubElement(cond_elem, "action", application="playback", data="local_stream://moh")
+        SubElement(cond_elem, "action", application="playback", data="tone_stream://%(1000,500,440,480);loops=20")
         return format_xml(doc)
 
     if dest_number == "park":
@@ -918,14 +920,14 @@ async def handle_dialplan_request(form_data: Dict[str, Any]) -> str:
         SubElement(cond_elem, "action", application="set", data="direction=internal")
         SubElement(cond_elem, "action", application="set", data="hangup_after_bridge=true")
         SubElement(cond_elem, "action", application="export", data="hangup_after_bridge=true")
+        SubElement(cond_elem, "action", application="set", data="disable_rtp_auto_adjust=true")
+        SubElement(cond_elem, "action", application="export", data="disable_rtp_auto_adjust=true")
 
-        # Ringing timeout variables with ignore_early_media=true so timer counts while ringing
-        SubElement(cond_elem, "action", application="set", data="ignore_early_media=true")
+        # Send 180 Ringing so softphones play local ringtone and do not timeout waiting for early media
+        SubElement(cond_elem, "action", application="ring_ready")
         SubElement(cond_elem, "action", application="set", data=f"call_timeout={timeout}")
         SubElement(cond_elem, "action", application="set", data=f"originate_timeout={timeout}")
         SubElement(cond_elem, "action", application="set", data=f"leg_timeout={timeout}")
-        SubElement(cond_elem, "action", application="set", data="ringback=%(2000,4000,440.0,480.0)")
-        SubElement(cond_elem, "action", application="set", data="instant_ringback=true")
         SubElement(cond_elem, "action", application="export", data="sip_contact_user=${destination_number}")
 
         # Check Virtual QA configuration for real-time monitoring
@@ -1016,13 +1018,16 @@ async def handle_dialplan_request(form_data: Dict[str, Any]) -> str:
         SubElement(cond_elem, "action", application="set", data=f"transfer_on_fail={fail_target} XML {context}")
         SubElement(cond_elem, "action", application="set", data="continue_on_fail=true")
 
-        if cf_record and cf_record.get("forward_always_enabled") and cf_record.get("forward_always_destination"):
+        if caller_id_number and caller_id_number == ext_num:
+            logger.info(f"Self-call detected: Extension {caller_id_number} called itself. Routing directly to voicemail.")
+            SubElement(cond_elem, "action", application="transfer", data=f"voicemail_{ext_num} XML {context}")
+        elif cf_record and cf_record.get("forward_always_enabled") and cf_record.get("forward_always_destination"):
             cf_dest = cf_record["forward_always_destination"].strip()
             logger.info(f"Extension {ext_num} has unconditional forward to {cf_dest}")
             SubElement(cond_elem, "action", application="transfer", data=f"{cf_dest} XML {context}")
         else:
             callee_domain = target_ext.get("sip_domain") or domain_name
-            bridge_data = f"{{ignore_early_media=true,originate_timeout={timeout},call_timeout={timeout},leg_timeout={timeout},continue_on_fail=true}}user/{ext_num}@{callee_domain}"
+            bridge_data = f"{{disable_rtp_auto_adjust=true,originate_timeout={timeout},call_timeout={timeout},leg_timeout={timeout},continue_on_fail=true}}user/{ext_num}@{callee_domain}"
             logger.info(f"Bridging internal call to endpoint 'user/{ext_num}@{callee_domain}' with timeout={timeout}s...")
             SubElement(cond_elem, "action", application="bridge", data=bridge_data)
             SubElement(cond_elem, "action", application="transfer", data=f"{fail_target} XML {context}")
