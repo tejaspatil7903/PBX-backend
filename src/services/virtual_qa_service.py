@@ -462,8 +462,12 @@ async def trigger_qa_violation(
 
         # Dispatch whisper via ESL uuid_broadcast targeted strictly to agent's ear
         if esl_client and wav_path:
-            cmd = f"uuid_broadcast {call_uuid} {wav_path} {qa_agent_leg}"
-            logger.info(f"Dispatching ESL whisper: {cmd}")
+            agent_chan = call_info.get("agent_channel_uuid")
+            if agent_chan:
+                cmd = f"uuid_broadcast {agent_chan} {wav_path} aleg"
+            else:
+                cmd = f"uuid_broadcast {call_uuid} {wav_path} {qa_agent_leg}"
+            logger.info(f"🔊 Dispatching ESL whisper to Agent {qa_agent_ext}: {cmd}")
             await esl_client.api(cmd)
 
         # Record audit event in DB
@@ -726,7 +730,12 @@ class VirtualQAService:
         if qa_enabled != "true":
             return
 
-        call_uuid = headers.get("Unique-ID") or headers.get("Channel-Call-UUID")
+        unique_id = headers.get("Unique-ID")
+        other_leg = headers.get("Other-Leg-Unique-ID")
+        channel_call_uuid = headers.get("Channel-Call-UUID")
+        rec_hint = headers.get("variable_qa_recording_path") or headers.get("variable_recording_file")
+
+        call_uuid = unique_id or channel_call_uuid
         tenant_id = headers.get("variable_tenant_id")
         agent_ext = headers.get("variable_qa_agent_ext")
         customer_ext = headers.get("variable_qa_customer_ext")
@@ -736,8 +745,22 @@ class VirtualQAService:
         cooldown = headers.get("variable_qa_cooldown", "10")
         supervisor_ext = headers.get("variable_qa_supervisor_ext", "")
 
+        caller_num = headers.get("Caller-Caller-ID-Number")
+        callee_num = headers.get("Caller-Destination-Number")
+        agent_channel_uuid = None
+        if agent_ext:
+            if caller_num == agent_ext:
+                agent_channel_uuid = unique_id
+            elif callee_num == agent_ext:
+                agent_channel_uuid = other_leg or unique_id
+
         call_info = {
             "call_uuid": call_uuid,
+            "unique_id": unique_id,
+            "other_leg": other_leg,
+            "channel_call_uuid": channel_call_uuid,
+            "agent_channel_uuid": agent_channel_uuid,
+            "rec_hint": rec_hint,
             "tenant_id": tenant_id,
             "qa_agent_ext": agent_ext,
             "qa_customer_ext": customer_ext,
@@ -771,7 +794,7 @@ class VirtualQAService:
         if call_uuid and call_uuid not in self.tailing_tasks:
             task = asyncio.create_task(self._tail_audio_worker(call_info))
             self.tailing_tasks[call_uuid] = task
-            logger.info(f"Started QA audio tailing worker for call {call_uuid}")
+            logger.info(f"Started QA audio tailing worker for call {call_uuid} (agent={agent_ext}, hint={rec_hint})")
 
     async def _handle_channel_hangup(self, headers: Dict[str, str]):
         call_uuid = headers.get("Unique-ID") or headers.get("Channel-Call-UUID")
@@ -793,20 +816,40 @@ class VirtualQAService:
 
     async def _tail_audio_worker(self, call_info: Dict[str, Any]):
         call_uuid = call_info["call_uuid"]
-        tenant_id = call_info["tenant_id"]
+        tenant_id = call_info.get("tenant_id")
         rec_dir = os.path.join(settings.QA_RECORDINGS_DIR, tenant_id) if tenant_id else settings.QA_RECORDINGS_DIR
-        candidate_paths = [
-            os.path.join(rec_dir, f"{call_uuid}.wav"),
-            os.path.join(settings.QA_RECORDINGS_DIR, f"{call_uuid}.wav"),
-        ]
+
+        candidate_paths = []
+        if call_info.get("rec_hint"):
+            candidate_paths.append(call_info["rec_hint"])
+        for u in [call_info.get("call_uuid"), call_info.get("other_leg"), call_info.get("channel_call_uuid"), call_info.get("unique_id")]:
+            if u:
+                candidate_paths.append(os.path.join(rec_dir, f"{u}.wav"))
+                candidate_paths.append(os.path.join(settings.QA_RECORDINGS_DIR, f"{u}.wav"))
+
+        candidate_paths = list(dict.fromkeys([p for p in candidate_paths if p]))
 
         # Wait for recording file to exist
         rec_path = None
-        for _ in range(60):
+        for _ in range(40):
             for cp in candidate_paths:
                 if os.path.exists(cp) and os.path.getsize(cp) >= 44:
                     rec_path = cp
                     break
+            if rec_path:
+                break
+            # Fallback: scan rec_dir for any newly modified .wav file within the last 30 seconds
+            if os.path.exists(rec_dir):
+                now = time.time()
+                for fn in os.listdir(rec_dir):
+                    if fn.endswith(".wav"):
+                        fp = os.path.join(rec_dir, fn)
+                        try:
+                            if (now - os.path.getmtime(fp)) <= 30 and os.path.getsize(fp) >= 44:
+                                rec_path = fp
+                                break
+                        except OSError:
+                            pass
             if rec_path:
                 break
             await asyncio.sleep(0.5)
@@ -814,6 +857,8 @@ class VirtualQAService:
         if not rec_path or not os.path.exists(rec_path):
             logger.warning(f"Audio file for call {call_uuid} never created in {candidate_paths}")
             return
+
+        logger.info(f"🎯 QA audio tailing attached to recording file: {rec_path}")
 
         try:
             with open(rec_path, "rb") as f:
@@ -855,16 +900,20 @@ class VirtualQAService:
                         # Only process non-silent chunks
                         if rms >= settings.QA_AUDIO_SILENCE_RMS:
                             agent_pcm = agent_samples.tobytes()
+                            logger.info(f"🎙️ Audio tail chunk: rms={rms:.1f} >= {settings.QA_AUDIO_SILENCE_RMS}. Transcribing with ElevenLabs...")
                             transcript = await transcribe_elevenlabs_stt(agent_pcm, sample_rate=header["sample_rate"])
                             if transcript:
+                                logger.info(f"📝 STT Transcript for Agent {call_info.get('qa_agent_ext')}: \"{transcript}\"")
                                 # Check 1: Local Regex Keyword Match
                                 kw_res = local_policy_check(transcript, banned_keywords)
                                 if kw_res:
+                                    logger.warning(f"🚨 BANNED KEYWORD MATCHED: '{kw_res.get('keyword')}' -> Triggering coaching whisper!")
                                     await trigger_qa_violation(call_info, kw_res, transcript=transcript, esl_client=self)
                                 else:
                                     # Check 2: Gemini Policy Check
                                     ai_res = await evaluate_with_gemini(transcript, policy_prompt, tenant_id=tenant_id)
                                     if ai_res.get("violation"):
+                                        logger.warning(f"🚨 GEMINI POLICY VIOLATION: {ai_res.get('reason')} -> Triggering coaching whisper!")
                                         await trigger_qa_violation(call_info, ai_res, transcript=transcript, esl_client=self)
 
                     await asyncio.sleep(settings.QA_AUDIO_TAIL_INTERVAL_MS / 1000.0)

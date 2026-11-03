@@ -980,13 +980,20 @@ async def handle_dialplan_request(form_data: Dict[str, Any]) -> str:
         if is_qa_monitored:
             logger.info(f"Call {caller_id_number} -> {ext_num} matches Virtual QA monitoring policy (agent={qa_agent_ext}, leg={qa_agent_leg})")
             SubElement(cond_elem, "action", application="set", data="RECORD_STEREO=true")
+            SubElement(cond_elem, "action", application="export", data="RECORD_STEREO=true")
             SubElement(cond_elem, "action", application="set", data="enable_file_write_buffering=false")
+            SubElement(cond_elem, "action", application="export", data="enable_file_write_buffering=false")
             SubElement(cond_elem, "action", application="set", data="qa_enabled=true")
+            SubElement(cond_elem, "action", application="export", data="qa_enabled=true")
             SubElement(cond_elem, "action", application="set", data=f"qa_config_id={qa_cfg['id']}")
+            SubElement(cond_elem, "action", application="export", data=f"qa_config_id={qa_cfg['id']}")
             SubElement(cond_elem, "action", application="set", data=f"qa_virtual_ext={qa_cfg.get('qa_extension_id') or ''}")
             SubElement(cond_elem, "action", application="set", data=f"qa_agent_leg={qa_agent_leg}")
+            SubElement(cond_elem, "action", application="export", data=f"qa_agent_leg={qa_agent_leg}")
             SubElement(cond_elem, "action", application="set", data=f"qa_agent_ext={qa_agent_ext}")
+            SubElement(cond_elem, "action", application="export", data=f"qa_agent_ext={qa_agent_ext}")
             SubElement(cond_elem, "action", application="set", data=f"qa_customer_ext={qa_customer_ext}")
+            SubElement(cond_elem, "action", application="export", data=f"qa_customer_ext={qa_customer_ext}")
             SubElement(cond_elem, "action", application="set", data=f"qa_max_retries={qa_cfg.get('max_warn_retries', 3)}")
             SubElement(cond_elem, "action", application="set", data=f"qa_cooldown={qa_cfg.get('cooldown_seconds', 10)}")
             SubElement(cond_elem, "action", application="set", data=f"qa_supervisor_ext={qa_cfg.get('supervisor_extension') or ''}")
@@ -999,6 +1006,9 @@ async def handle_dialplan_request(form_data: Dict[str, Any]) -> str:
                 pass
         rec_path = f"/var/lib/freeswitch/recordings/{tenant_id}/${{uuid}}.wav"
         SubElement(cond_elem, "action", application="set", data=f"recording_file={rec_path}")
+        SubElement(cond_elem, "action", application="export", data=f"recording_file={rec_path}")
+        SubElement(cond_elem, "action", application="set", data=f"qa_recording_path={rec_path}")
+        SubElement(cond_elem, "action", application="export", data=f"qa_recording_path={rec_path}")
         SubElement(cond_elem, "action", application="set", data=f"execute_on_answer=record_session {rec_path}")
 
         # Failover target on no-answer or failure: forward target if enabled, else voicemail
