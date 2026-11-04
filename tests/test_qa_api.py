@@ -9,10 +9,10 @@ class TestQAAPI(unittest.TestCase):
         self.client = TestClient(app)
         self.mock_user = CurrentUser(
             user_id="user-supervisor-uuid",
-            tenant_id="tenant-uuid-1",
+            tenant_id="00000000-0000-0000-0000-000000000001",
             username="sup_user",
             email="sup@acme.com",
-            role="SUPERVISOR"
+            role="TENANT_ADMIN"
         )
         app.dependency_overrides[get_current_user] = lambda: self.mock_user
 
@@ -122,6 +122,33 @@ class TestQAAPI(unittest.TestCase):
         mock_settings.QA_DEMO_MODE = False
         resp = self.client.post("/api/v1/qa/calls/call-active-1/simulate-violation")
         self.assertEqual(resp.status_code, 404)
+
+    @patch("src.api.v1.qa.execute_query_one")
+    def test_get_webrtc_credentials(self, mock_query_one):
+        mock_query_one.side_effect = [
+            # 1. Tenant lookup
+            {
+                "id": "00000000-0000-0000-0000-000000000001",
+                "name": "Acme Corp",
+                "sip_domain": "pbx.acme.local"
+            },
+            # 2. Extension lookup by email
+            {
+                "extension_number": "1004",
+                "sip_password": "supersecretpassword",
+                "display_name": "Supervisor"
+            }
+        ]
+
+        resp = self.client.get("/api/v1/qa/webrtc-credentials")
+        self.assertEqual(resp.status_code, 200, resp.text)
+        data = resp.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["extension"], "1004")
+        self.assertEqual(data["password"], "supersecretpassword")
+        self.assertEqual(data["sip_domain"], "pbx.acme.local")
+        self.assertIn("ws://", data["ws_server"])
+        self.assertTrue(len(data["ice_servers"]) > 0)
 
 if __name__ == "__main__":
     unittest.main()

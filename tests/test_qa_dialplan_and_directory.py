@@ -131,5 +131,66 @@ class TestQADialplanAndDirectory(unittest.IsolatedAsyncioTestCase):
         set_actions = [data for app, data in actions if app == "set"]
         self.assertTrue(any("eavesdrop_whisper_aleg=true" in s or "eavesdrop_enable_dtmf=true" in s for s in set_actions))
 
+    @patch("src.xml_curl.dialplan.get_redis")
+    @patch("src.xml_curl.dialplan.execute_query_one")
+    async def test_supervisor_dial_listen_mode_0(self, mock_exec_one, mock_get_redis):
+        mock_redis = AsyncMock()
+        mock_get_redis.return_value = mock_redis
+        mock_redis.get.return_value = "call-active-uuid-880"
+
+        mock_exec_one.return_value = {
+            "id": "ext-1004-uuid",
+            "extension_number": "1004",
+            "tenant_id": "tenant-uuid-1"
+        }
+
+        form_data = {
+            "Caller-Context": "default",
+            "Caller-Destination-Number": "*8801001", # Mode 0: Silent Listen (Spy)
+            "Caller-Caller-ID-Number": "1004",
+            "variable_tenant_id": "tenant-uuid-1",
+            "domain": "acme.pbx.com"
+        }
+
+        xml_res = await handle_dialplan_request(form_data)
+        root = ET.fromstring(xml_res)
+
+        actions = [(a.attrib.get("application"), a.attrib.get("data")) for a in root.findall(".//action")]
+        self.assertTrue(any(app == "eavesdrop" and "call-active-uuid-880" in data for app, data in actions))
+        set_actions = [data for app, data in actions if app == "set"]
+        self.assertTrue(any("eavesdrop_enable_dtmf=true" in s for s in set_actions))
+        self.assertFalse(any("eavesdrop_whisper_aleg=true" in s for s in set_actions), "Mode 0 must not whisper to aleg")
+        self.assertFalse(any("eavesdrop_whisper_bleg=true" in s for s in set_actions), "Mode 0 must not whisper to bleg")
+
+    @patch("src.xml_curl.dialplan.get_redis")
+    @patch("src.xml_curl.dialplan.execute_query_one")
+    async def test_supervisor_dial_barge_mode_3(self, mock_exec_one, mock_get_redis):
+        mock_redis = AsyncMock()
+        mock_get_redis.return_value = mock_redis
+        mock_redis.get.return_value = "call-active-uuid-883"
+
+        mock_exec_one.return_value = {
+            "id": "ext-1004-uuid",
+            "extension_number": "1004",
+            "tenant_id": "tenant-uuid-1"
+        }
+
+        form_data = {
+            "Caller-Context": "default",
+            "Caller-Destination-Number": "*8831001", # Mode 3: Three-Way Barge In
+            "Caller-Caller-ID-Number": "1004",
+            "variable_tenant_id": "tenant-uuid-1",
+            "domain": "acme.pbx.com"
+        }
+
+        xml_res = await handle_dialplan_request(form_data)
+        root = ET.fromstring(xml_res)
+
+        actions = [(a.attrib.get("application"), a.attrib.get("data")) for a in root.findall(".//action")]
+        self.assertTrue(any(app == "eavesdrop" and "call-active-uuid-883" in data for app, data in actions))
+        set_actions = [data for app, data in actions if app == "set"]
+        self.assertTrue(any("eavesdrop_whisper_aleg=true" in s for s in set_actions), "Mode 3 must bridge mic to aleg")
+        self.assertTrue(any("eavesdrop_whisper_bleg=true" in s for s in set_actions), "Mode 3 must bridge mic to bleg")
+
 if __name__ == "__main__":
     unittest.main()

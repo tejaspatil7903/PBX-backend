@@ -2,7 +2,7 @@ import json
 import time
 import logging
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from pydantic import BaseModel, Field
 
 from src.core.config import settings
@@ -407,24 +407,32 @@ async def supervisor_intervene(
 
     # Audit row
     try:
-        await execute_query(
-            """
-            INSERT INTO qa_events (
-                tenant_id, call_uuid, event_type, agent_extension,
-                coaching_message, details
-            ) VALUES (
-                CAST(:tid AS uuid), :uuid, 'intervention', :agent_ext,
-                :msg, CAST(:details AS jsonb)
+        import uuid as _uuid_lib
+        safe_tid = None
+        try:
+            safe_tid = str(_uuid_lib.UUID(str(tid)))
+        except Exception:
+            pass
+
+        if safe_tid:
+            await execute_query(
+                """
+                INSERT INTO qa_events (
+                    tenant_id, call_uuid, event_type, agent_extension,
+                    coaching_message, details
+                ) VALUES (
+                    CAST(:tid AS uuid), :uuid, 'intervention', :agent_ext,
+                    :msg, CAST(:details AS jsonb)
+                )
+                """,
+                {
+                    "tid": safe_tid,
+                    "uuid": call_uuid,
+                    "agent_ext": call_data.get("agent_ext", ""),
+                    "msg": f"Supervisor intervention mode='{mode}'",
+                    "details": json.dumps({"mode": mode, "supervisor_ext": sup_ext, "user_id": current_user.user_id})
+                }
             )
-            """,
-            {
-                "tid": tid,
-                "uuid": call_uuid,
-                "agent_ext": call_data.get("agent_ext", ""),
-                "msg": f"Supervisor intervention mode='{mode}'",
-                "details": json.dumps({"mode": mode, "supervisor_ext": sup_ext, "user_id": current_user.user_id})
-            }
-        )
     except Exception as db_err:
         logger.error(f"Failed to record intervention event: {db_err}")
 
@@ -436,15 +444,79 @@ async def supervisor_intervene(
     }
 
 
-@router.post("/calls/{call_uuid}/simulate-violation")
-async def simulate_violation(
-    call_uuid: str,
+@router.get("/webrtc-credentials")
+async def get_webrtc_credentials(
+    request: Request,
     current_user: CurrentUser = Depends(require_module("virtual-qa", allowed_roles=["SUPER_ADMIN", "TENANT_ADMIN", "SUB_ADMIN", "SUPERVISOR"]))
 ):
     """
-    Demo/testing endpoint to trigger a simulated violation on an active call.
-    Gated strictly by QA_DEMO_MODE=True.
+    Returns ephemeral WebRTC SIP credentials for in-browser audio listening and barging.
     """
+    tid = current_user.tenant_id
+    if not tid and current_user.is_super_admin:
+        t_row = await execute_query_one("SELECT id FROM tenants WHERE enabled = true AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 1")
+        if t_row:
+            tid = str(t_row["id"])
+
+    if not tid:
+        raise HTTPException(status_code=400, detail="Tenant context required")
+
+    tenant_row = await execute_query_one(
+        "SELECT id, name, sip_domain FROM tenants WHERE id = CAST(:tid AS uuid)",
+        {"tid": tid}
+    )
+    sip_domain = tenant_row.get("sip_domain") if tenant_row else "pbx.aikyamlabs.local"
+
+    # Find supervisor extension and SIP password
+    ext_row = await execute_query_one(
+        """
+        SELECT extension_number, sip_password, display_name 
+        FROM extensions 
+        WHERE tenant_id = CAST(:tid AS uuid) 
+          AND email = :email AND enabled = true AND deleted_at IS NULL 
+        LIMIT 1
+        """,
+        {"tid": tid, "email": current_user.email}
+    )
+
+    if not ext_row:
+        ext_row = await execute_query_one(
+            """
+            SELECT extension_number, sip_password, display_name 
+            FROM extensions 
+            WHERE tenant_id = CAST(:tid AS uuid) 
+              AND enabled = true AND deleted_at IS NULL 
+              AND (display_name ILIKE '%supervisor%' OR display_name ILIKE '%qa%' OR extension_number IN ('1004', '9001', '1003'))
+            ORDER BY (display_name ILIKE '%supervisor%') DESC
+            LIMIT 1
+            """,
+            {"tid": tid}
+        )
+
+    if not ext_row:
+        raise HTTPException(status_code=404, detail="No supervisor extension found in tenant for WebRTC audio")
+
+    host_ip = request.headers.get("x-forwarded-host") or request.headers.get("host") or "35.244.8.204"
+    if ":" in host_ip:
+        host_ip = host_ip.split(":")[0]
+
+    # FreeSWITCH WS is on port 5066; WSS is on port 7443
+    ws_uri = f"ws://{host_ip}:5066"
+
+    return {
+        "status": "success",
+        "ws_server": ws_uri,
+        "sip_domain": sip_domain,
+        "extension": ext_row["extension_number"],
+        "password": ext_row["sip_password"],
+        "display_name": ext_row.get("display_name") or "In-Browser Supervisor",
+        "ice_servers": [
+            {"urls": "stun:stun.l.google.com:19302"},
+            {"urls": "stun:stun1.l.google.com:19302"}
+        ]
+    }
+
+
 @router.post("/calls/start-demo")
 async def start_demo_call(
     payload: Optional[StartDemoCallRequest] = None,
