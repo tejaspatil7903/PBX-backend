@@ -38,6 +38,7 @@
     <param name="challenge-realm" value="auto_from"/>
 
     <!-- NAT Traversal & Symmetric RTP for Linux Cloud VM -->
+    <param name="apply-nat-acl" value="rfc1918.auto"/>
     <param name="disable-rtp-auto-adjust" value="false"/>
     <param name="aggressive-nat-detection" value="true"/>
     <param name="NDLB-force-rport" value="true"/>
@@ -45,6 +46,7 @@
     <param name="NDLB-received-in-nat-reg-contact" value="true"/>
     <param name="NDLB-sendrecv-in-session" value="true"/>
     <param name="nat-options-ping" value="true"/>
+    <param name="keep-alive-interval" value="20"/>
 
     <!-- WebRTC WSS Configuration -->
     <param name="ws-binding" value=":5066"/>

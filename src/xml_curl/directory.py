@@ -103,7 +103,7 @@ async def handle_directory_request(form_data: Dict[str, Any]) -> str:
     section = SubElement(doc, "section", name="directory")
 
     # Support queried domain, tenant sip_domain, and PBX server host aliases
-    aliases = [domain_name, sip_domain, "pbx.terrixai.com", "8.234.117.15", "127.0.0.1"]
+    aliases = [domain_name, sip_domain, "35.244.8.204", "pbx.terrixai.com", "8.234.117.15", "127.0.0.1"]
     domains_to_create = list(dict.fromkeys([a for a in aliases if a]))
 
     # Standard Sofia dial-string allows FreeSWITCH to locate the live Sofia registration contact
