@@ -813,13 +813,39 @@ class VirtualQAService:
 
         r_obj = get_redis()
         redis_client = await r_obj if hasattr(r_obj, "__await__") else r_obj
+
+        # If tenant_id was not in headers, resolve it from Redis before cleanup
+        if not tenant_id and redis_client and call_uuid:
+            try:
+                keys = await redis_client.keys(f"tenant:*:qa_call:{call_uuid}")
+                if keys:
+                    first_key = keys[0].decode("utf-8") if isinstance(keys[0], bytes) else keys[0]
+                    tenant_id = first_key.split(":")[1]
+            except Exception:
+                pass
+
         if redis_client and tenant_id:
             await redis_client.delete(f"tenant:{tenant_id}:qa_call:{call_uuid}")
             if agent_ext:
                 await redis_client.delete(f"tenant:{tenant_id}:qa_agent_call:{agent_ext}")
                 await redis_client.delete(f"qa_agent_call:{agent_ext}")
             await redis_client.delete(f"tenant:{tenant_id}:qa_cd:{call_uuid}")
-        logger.info(f"Cleaned up QA state for terminated call {call_uuid}")
+
+        # Broadcast call termination event so frontend nudges dismiss and WebRTC disconnects cleanly
+        if tenant_id and call_uuid:
+            try:
+                ws_payload = {
+                    "event_type": "qa.call_ended",
+                    "call_uuid": str(call_uuid),
+                    "tenant_id": str(tenant_id),
+                    "agent_extension": str(agent_ext or ""),
+                    "timestamp": time.time(),
+                }
+                await broadcast_qa_event(str(tenant_id), ws_payload)
+            except Exception as b_err:
+                logger.warning(f"Failed to broadcast qa.call_ended: {b_err}")
+
+        logger.info(f"Cleaned up QA state and broadcasted termination for call {call_uuid}")
 
     async def _tail_audio_worker(self, call_info: Dict[str, Any]):
         call_uuid = call_info["call_uuid"]
