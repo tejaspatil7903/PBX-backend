@@ -500,6 +500,10 @@ async def get_webrtc_credentials(
     if ":" in host_ip:
         host_ip = host_ip.split(":")[0]
 
+    # If host_ip is loopback / internal docker host (from reverse proxy changeOrigin), fallback to public IP
+    if host_ip in ("127.0.0.1", "localhost", "0.0.0.0", "api", "nginx"):
+        host_ip = "35.244.8.204"
+
     # FreeSWITCH WS is on port 5066; WSS is on port 7443
     ws_uri = f"ws://{host_ip}:5066"
 
