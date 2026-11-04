@@ -28,7 +28,7 @@
     <param name="dialplan-timestamps" value="false"/>
 
     <!-- Run the timer at 20ms by default and drop down as needed unless you set 1m-timer=true which was previous default -->
-    <!-- <param name="1ms-timer" value="true"/> -->
+    <param name="1ms-timer" value="true"/>
 
     <!--
 	Set the Switch Name for HA environments.
@@ -132,10 +132,10 @@
     <!-- <param name="verbose-channel-events" value="no"/> -->
 
     <!-- Enable clock nanosleep -->
-    <!-- <param name="enable-clock-nanosleep" value="true"/> -->
+    <param name="enable-clock-nanosleep" value="true"/>
 
     <!-- Enable monotonic timing -->
-    <!-- <param name="enable-monotonic-timing" value="true"/> -->
+    <param name="enable-monotonic-timing" value="true"/>
 
     <!-- NEEDS DOCUMENTATION -->
     <!-- <param name="enable-softtimer-timerfd" value="true"/> -->

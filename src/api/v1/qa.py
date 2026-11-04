@@ -387,10 +387,7 @@ async def supervisor_intervene(
     flags = [
         "eavesdrop_enable_dtmf=true",
         "originate_timeout=25",
-        "ignore_early_media=true",
-        "read_resample_rate=8000",
-        "write_resample_rate=48000",
-        "eavesdrop_buffer=1000",
+        "suppress_cng=true",
     ]
     if mode == "whisper":
         if agent_leg in ("aleg", "0", "left"):
