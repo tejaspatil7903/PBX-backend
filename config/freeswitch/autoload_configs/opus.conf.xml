@@ -1,0 +1,13 @@
+<configuration name="opus.conf" description="OPUS Codec Configuration">
+  <settings>
+    <param name="use-vbr" value="1"/>
+    <param name="use-dtx" value="0"/>
+    <param name="complexity" value="10"/>
+    <param name="packet-loss-percent" value="20"/>
+    <param name="asymmetric-sample-rates" value="1"/>
+    <param name="maxaveragebitrate" value="64000"/>
+    <param name="maxplaybackrate" value="48000"/>
+    <param name="sprop-maxcapturerate" value="48000"/>
+    <param name="keep-fec" value="1"/>
+  </settings>
+</configuration>

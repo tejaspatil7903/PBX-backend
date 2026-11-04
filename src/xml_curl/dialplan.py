@@ -208,6 +208,12 @@ async def handle_dialplan_request(form_data: Dict[str, Any]) -> str:
             cond_elem = SubElement(ext_elem, "condition", field="destination_number", expression=".*")
             SubElement(cond_elem, "action", application="set", data=f"tenant_id={tenant_id}")
             SubElement(cond_elem, "action", application="set", data="direction=internal")
+            SubElement(cond_elem, "action", application="set", data="codec_string=OPUS,PCMU,PCMA")
+            SubElement(cond_elem, "action", application="set", data="absolute_codec_string=OPUS")
+            SubElement(cond_elem, "action", application="set", data="jitterbuffer_msec=60:120:20")
+            SubElement(cond_elem, "action", application="set", data="rtp_jitter_buffer_during_bridge=true")
+            SubElement(cond_elem, "action", application="set", data="eavesdrop_buffer=1000")
+            SubElement(cond_elem, "action", application="set", data="suppress_cng=true")
             SubElement(cond_elem, "action", application="set", data="eavesdrop_enable_dtmf=true")
             if mode == "1":
                 SubElement(cond_elem, "action", application="set", data="eavesdrop_whisper_aleg=true")

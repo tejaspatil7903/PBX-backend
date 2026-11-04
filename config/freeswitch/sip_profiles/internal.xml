@@ -27,7 +27,8 @@
     <param name="inbound-codec-prefs" value="OPUS,PCMU,PCMA"/>
     <param name="outbound-codec-prefs" value="OPUS,PCMU,PCMA"/>
     <param name="inbound-late-negotiation" value="true"/>
-    <param name="inbound-codec-negotiation" value="generous"/>
+    <param name="inbound-codec-negotiation" value="greedy"/>
+    <param name="jitterbuffer-msec" value="60:120:20"/>
 
     <!-- Extension Authentication -->
     <param name="auth-calls" value="true"/>
