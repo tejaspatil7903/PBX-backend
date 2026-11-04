@@ -7,7 +7,7 @@
     <param name="asymmetric-sample-rates" value="1"/>
     <param name="maxaveragebitrate" value="64000"/>
     <param name="maxplaybackrate" value="48000"/>
-    <param name="sprop-maxcapturerate" value="48000"/>
+    <param name="sprop-maxcapturerate" value="8000"/>
     <param name="keep-fec" value="1"/>
   </settings>
 </configuration>

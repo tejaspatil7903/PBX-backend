@@ -384,7 +384,14 @@ async def supervisor_intervene(
         sup_ext = "1004"
 
     # Build originate eavesdrop command
-    flags = ["eavesdrop_enable_dtmf=true", "originate_timeout=25", "ignore_early_media=true"]
+    flags = [
+        "eavesdrop_enable_dtmf=true",
+        "originate_timeout=25",
+        "ignore_early_media=true",
+        "read_resample_rate=8000",
+        "write_resample_rate=48000",
+        "eavesdrop_buffer=1000",
+    ]
     if mode == "whisper":
         if agent_leg in ("aleg", "0", "left"):
             flags.append("eavesdrop_whisper_aleg=true")

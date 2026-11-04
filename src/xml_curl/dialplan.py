@@ -210,6 +210,8 @@ async def handle_dialplan_request(form_data: Dict[str, Any]) -> str:
             SubElement(cond_elem, "action", application="set", data="direction=internal")
             SubElement(cond_elem, "action", application="set", data="codec_string=OPUS,PCMU,PCMA")
             SubElement(cond_elem, "action", application="set", data="absolute_codec_string=OPUS")
+            SubElement(cond_elem, "action", application="set", data="read_resample_rate=8000")
+            SubElement(cond_elem, "action", application="set", data="write_resample_rate=48000")
             SubElement(cond_elem, "action", application="set", data="jitterbuffer_msec=60:120:20")
             SubElement(cond_elem, "action", application="set", data="rtp_jitter_buffer_during_bridge=true")
             SubElement(cond_elem, "action", application="set", data="eavesdrop_buffer=1000")
